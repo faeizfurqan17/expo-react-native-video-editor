@@ -109,8 +109,10 @@ export class ExportPipeline {
       crop: this.state.crop,
       filter: segment.filter.preset,
       filterIntensity: segment.filter.intensity,
+      // Overlap test (not start-containment) so an effect spanning a split
+      // boundary still applies to every segment it touches.
       effects: this.state.effects.filter(
-        (e) => e.startTime >= segment.startTime && e.startTime < segment.endTime
+        (e) => e.startTime < segment.endTime && e.startTime + e.duration > segment.startTime
       ),
       textOverlays: this.state.textOverlays.filter(
         (t) => t.startTime < segment.endTime && t.endTime > segment.startTime
@@ -135,7 +137,9 @@ export class ExportPipeline {
         relevantStickers[i],
         i + 1,
         this.state.sourceWidth,
-        this.state.sourceHeight
+        this.state.sourceHeight,
+        segment.startTime,
+        segment.speed
       );
       stickerInputs.push(result.inputs);
       stickerFilters.push(result.filter);

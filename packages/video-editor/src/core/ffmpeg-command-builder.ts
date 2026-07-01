@@ -161,18 +161,26 @@ export class FFmpegCommandBuilder {
     overlay: StickerOverlay,
     inputIndex: number,
     videoWidth: number,
-    videoHeight: number
+    videoHeight: number,
+    /** Segment start in source time — enable window is segment-local after `-ss`. */
+    timeOffset: number = 0,
+    /** Segment speed — setpts on the base stream rescales timestamps. */
+    speed: number = 1
   ): { inputs: string; filter: string } {
     const x = Math.round(overlay.position.x * videoWidth);
     const y = Math.round(overlay.position.y * videoHeight);
     const w = Math.round(overlay.size.width * overlay.scale);
     const h = Math.round(overlay.size.height * overlay.scale);
 
+    const safeSpeed = speed > 0 ? speed : 1;
+    const localStart = Math.max(0, (overlay.startTime - timeOffset) / safeSpeed);
+    const localEnd = Math.max(localStart, (overlay.endTime - timeOffset) / safeSpeed);
+
     const inputs = `-i "${overlay.uri}"`;
     const scaleLabel = `s${inputIndex}`;
     const filter =
       `[${inputIndex}:v]scale=${w}:${h}[${scaleLabel}];` +
-      `[0:v][${scaleLabel}]overlay=${x}:${y}:enable='between(t,${overlay.startTime.toFixed(3)},${overlay.endTime.toFixed(3)})'`;
+      `[0:v][${scaleLabel}]overlay=${x}:${y}:enable='between(t,${localStart.toFixed(3)},${localEnd.toFixed(3)})'`;
 
     return { inputs, filter };
   }
@@ -256,30 +264,55 @@ export class FFmpegCommandBuilder {
 
   // --- Effects ---
 
-  static effect(effect: Effect, fps: number = 30): string {
-    const frames = Math.round(effect.duration * fps);
+  static effect(
+    effect: Effect,
+    fps: number = 30,
+    /** Output canvas for zoompan (post-rotation/crop dims, even numbers). */
+    outWidth: number = 1280,
+    outHeight: number = 720,
+    /** Segment start in source time — enable window is segment-local after `-ss`. */
+    timeOffset: number = 0,
+    /** Segment speed — setpts precedes effects in the chain, so windows scale. */
+    speed: number = 1
+  ): string {
+    const safeSpeed = speed > 0 ? speed : 1;
+    const start = Math.max(0, (effect.startTime - timeOffset) / safeSpeed);
+    const end = Math.max(start, (effect.startTime + effect.duration - timeOffset) / safeSpeed);
+    const dur = Math.max(0.001, end - start);
+    const S = start.toFixed(3);
+    const E = end.toFixed(3);
+    const D = dur.toFixed(3);
+    const enable = `enable='between(t,${S},${E})'`;
+    // zoompan needs an explicit even output size; hd1080 distorted other resolutions.
+    const w = Math.max(2, outWidth - (outWidth % 2));
+    const h = Math.max(2, outHeight - (outHeight % 2));
 
     switch (effect.type) {
+      // zoompan does not support timeline enable — gate via `it` (input time) in
+      // the z expression instead, ramping zoom over the effect window.
       case 'zoom_in':
-        return `zoompan=z='min(zoom+0.0015,1.5)':d=${frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=hd1080:enable='between(t,${effect.startTime},${effect.startTime + effect.duration})'`;
+        return `zoompan=z='if(between(it,${S},${E}),min(1+0.5*(it-${S})/${D},1.5),1)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${w}x${h}`;
 
       case 'zoom_out':
-        return `zoompan=z='if(lte(zoom\\,1.0)\\,1.5\\,max(1.001\\,zoom-0.0015))':d=${frames}:enable='between(t,${effect.startTime},${effect.startTime + effect.duration})'`;
+        return `zoompan=z='if(between(it,${S},${E}),max(1.5-0.5*(it-${S})/${D},1),1)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${w}x${h}`;
 
       case 'glitch':
-        return `rgbashift=rh=-5:gh=3:bh=7:enable='between(t,${effect.startTime},${effect.startTime + effect.duration})',noise=alls=20:allf=t:enable='between(t,${effect.startTime},${effect.startTime + effect.duration})'`;
+        return `rgbashift=rh=-5:gh=3:bh=7:${enable},noise=alls=20:allf=t:${enable}`;
 
       case 'vhs':
-        return `noise=alls=30:allf=t:enable='between(t,${effect.startTime},${effect.startTime + effect.duration})',eq=contrast=1.1:brightness=0.05:enable='between(t,${effect.startTime},${effect.startTime + effect.duration})',rgbashift=rh=3:bv=-2:enable='between(t,${effect.startTime},${effect.startTime + effect.duration})'`;
+        return `noise=alls=30:allf=t:${enable},eq=contrast=1.1:brightness=0.05:${enable},rgbashift=rh=3:bv=-2:${enable}`;
 
       case 'soul':
-        return `split[a][b];[b]fade=t=in:st=${effect.startTime}:d=0.5,setpts=PTS+0.1/TB[b];[a][b]overlay=format=auto:enable='between(t,${effect.startTime},${effect.startTime + effect.duration})'`;
+        return `split[a][b];[b]fade=t=in:st=${S}:d=0.5,setpts=PTS+0.1/TB[b];[a][b]overlay=format=auto:${enable}`;
 
+      // Constant-dimension shake: crop a fixed 20px-smaller canvas for the whole
+      // clip (jitter x/y only inside the window), then scale back to input size.
+      // Keeps frame dims stable so concat -c copy works across segments.
       case 'shake':
-        return `crop=iw-20:ih-20:10+random(0)*10:10+random(1)*10:enable='between(t,${effect.startTime},${effect.startTime + effect.duration})'`;
+        return `crop=iw-20:ih-20:'10+if(between(t,${S},${E}),-5+10*random(0),0)':'10+if(between(t,${S},${E}),-5+10*random(1),0)',scale=iw+20:ih+20`;
 
       case 'flash':
-        return `eq=brightness='0.3*sin(2*PI*t*4)':enable='between(t,${effect.startTime},${effect.startTime + effect.duration})'`;
+        return `eq=brightness='0.3*sin(2*PI*(t-${S})*4)':${enable}`;
     }
   }
 
@@ -344,10 +377,13 @@ export class FFmpegCommandBuilder {
       filters.push(this.colorMatrixToGeqFilter(matrix));
     }
 
-    // Effects
+    // Effects — canvas dims after rotation/crop (zoompan needs explicit size)
     if (effects) {
+      const rotated = segment.rotation === 90 || segment.rotation === 270;
+      const effW = crop ? Math.round(crop.width) : rotated ? videoHeight : videoWidth;
+      const effH = crop ? Math.round(crop.height) : rotated ? videoWidth : videoHeight;
       for (const effect of effects) {
-        const effFilter = this.effect(effect, fps);
+        const effFilter = this.effect(effect, fps, effW, effH, timeOffset, segment.speed);
         if (effFilter) filters.push(effFilter);
       }
     }
