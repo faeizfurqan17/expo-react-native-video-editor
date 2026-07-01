@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.expo/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# Expo
+example/ios/
+example/android/
+
+# Build
+packages/video-editor/dist/

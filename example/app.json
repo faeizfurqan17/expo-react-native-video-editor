@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "Video Editor Example",
+    "slug": "video-editor-example",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "video-editor-example",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.videoeditor",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app needs camera access to record video",
+        "NSMicrophoneUsageDescription": "This app needs microphone access to record audio",
+        "NSPhotoLibraryUsageDescription": "This app needs photo library access to select videos"
+      }
+    },
+    "android": {
+      "package": "com.example.videoeditor",
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-video",
+      "expo-audio",
+      "expo-image-picker",
+      ["./plugins/with-ffmpeg-kit", { "package": "full" }]
+    ]
+  }
+}
