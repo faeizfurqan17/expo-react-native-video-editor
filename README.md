@@ -2,8 +2,7 @@
 
 An open-source, Instagram Stories–style video/image editor for Expo apps — fullscreen looping preview, swipeable color filters, draggable text and sticker overlays, background music mixing, and FFmpeg-based export.
 
-![Uploading ScreenRecording2026-07-14at12.58.33PM-ezgif.com-video-to-gif-converter.gif…]()
-
+![Demo](https://raw.githubusercontent.com/faeizfurqan17/expo-react-native-video-editor/main/packages/video-editor/assets/demo.gif)
 
 ## Features
 
