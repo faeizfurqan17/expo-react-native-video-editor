@@ -51,7 +51,7 @@
 - **Controls/** — Speed, crop modals.
 
 ### Filters (`packages/video-editor/src/filters/`)
-- **presets.ts** — `FILTER_PRESETS`: each preset has a **4×5 color matrix** (same semantics as Skia). `applyIntensity()` blends matrix toward identity. `getFilterByPreset()` lookup.
+- **presets.ts** — `FILTER_PRESETS`: each preset has a **4×5 color matrix** (same semantics as Skia). `getFilterByPreset()` lookup. Filters apply at full strength — no intensity blend.
 
 ### Store & hooks
 - **store/editor-store.ts** — Zustand: segments, playback, filter, overlays, undo/redo (debounced for sliders).
@@ -60,6 +60,13 @@
 ### Utils
 - **utils/thumbnails.ts** — FFmpeg frame strip for timeline thumbs (not `expo-video` thumbnails).
 - **utils/playback-sync.ts** — `resolvePlaybackTick`, `clampSourceTimeToSegments` for multi-segment preview.
+- **utils/effect-preview.ts** — pure per-frame approximation of export effects (transforms + overlay flags) for live preview.
+
+### Tests
+- Jest (`yarn test`, node env, ts-jest) covers the pure modules: `ffmpeg-command-builder` (incl. segment-local timing windows), `editor-store` (split/delete remap/undo), `playback-sync`, `effect-preview`.
+
+### Export timing model
+Segments are encoded with `-ss segment.startTime`, so FFmpeg's clock is **segment-local** (starts at 0). `drawText()`, `effect()` and `overlayImage()` all take `timeOffset` + `speed` and localize their `enable` windows accordingly; overlays/effects are matched to segments by overlap, so they survive splits.
 
 ## Data Flow
 
@@ -78,8 +85,7 @@ Export:
 | Aspect | Preview | Export |
 |--------|---------|--------|
 | **Video decode** | `expo-video` **or** Skia `useVideo` (never both decoding at full rate for the same picture) | FFmpeg only |
-| **Filters** | Same matrix as `presets.ts`: `Fill` → `ImageShader` → `ColorMatrix` on Skia frames | Same matrix → **`format=rgb24,geq=…,format=yuv420p`** built in `FFmpegCommandBuilder.colorMatrixToGeqFilter()` after `applyIntensity()` |
-| **Intensity** | `applyIntensity(matrix, intensity)` | Same interpolation, then geq |
+| **Filters** | Same matrix as `presets.ts`, applied via `ColorMatrix` on Skia frames | Same matrix → `colorchannelmixer` + `lut` built in `FFmpegCommandBuilder.colorMatrixToFastFilter()` |
 | **Text** | RN `Animated.Text` + gestures | FFmpeg `drawtext` |
 | **Stickers** | Skia `Image` on overlay canvas | FFmpeg `overlay` in `-filter_complex` when sticker inputs exist |
 | **Speed** | Player / Skia playback | `setpts` + `atempo` chain |

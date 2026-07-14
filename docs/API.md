@@ -7,7 +7,7 @@
 The root component that renders the full video editor UI.
 
 ```tsx
-import { VideoEditor } from '@anthropic/react-native-video-editor';
+import { VideoEditor } from '@faeizfurqan/expo-story-video-and-image-editor';
 
 <VideoEditor
   source={videoUri}
@@ -63,7 +63,7 @@ import { VideoEditor } from '@anthropic/react-native-video-editor';
 Programmatic access to editor functionality without the UI.
 
 ```tsx
-import { useVideoEditor } from '@anthropic/react-native-video-editor';
+import { useVideoEditor } from '@faeizfurqan/expo-story-video-and-image-editor';
 
 const editor = useVideoEditor({ source: videoUri });
 
@@ -105,9 +105,8 @@ const stickerId = editor.addSticker({
 });
 
 // Filters
-editor.setFilter('norway');           // Apply filter preset
-editor.setFilterIntensity(0.7);       // 70% intensity
-editor.clearFilter();
+editor.setFilter('norway');           // Apply filter preset (full strength)
+editor.setFilter('normal');           // Clear filter
 
 // Effects
 editor.addEffect({

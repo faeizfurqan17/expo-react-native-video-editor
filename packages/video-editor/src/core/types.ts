@@ -1,19 +1,12 @@
 // ============================================
-// Core Types for React Native Video Editor
+// Core Types — Instagram Stories-style editor
+// One clip (≤60s) or one still image, text + stickers + filter + music.
 // ============================================
 
-// --- Video Segments ---
+export type SourceType = 'video' | 'image';
 
-export interface VideoSegment {
-  id: string;
-  sourceUri: string;
-  startTime: number;
-  endTime: number;
-  speed: number;
-  volume: number;
-  rotation: 0 | 90 | 180 | 270;
-  filter: FilterState;
-}
+/** Fixed export/preview duration for an image source (no natural duration of its own). */
+export const IMAGE_SOURCE_DURATION_SECONDS = 15;
 
 // --- Overlays ---
 
@@ -24,10 +17,11 @@ export interface TextOverlay {
   fontSize: number;
   color: string;
   backgroundColor?: string;
-  position: { x: number; y: number }; // Normalized 0-1
+  position: { x: number; y: number }; // Normalized 0-1, anchored at center
   rotation: number;
   scale: number;
   alignment: 'left' | 'center' | 'right';
+  /** Visibility window in seconds; defaults to the whole clip. */
   startTime: number;
   endTime: number;
 }
@@ -41,6 +35,8 @@ export interface StickerOverlay {
   scale: number;
   startTime: number;
   endTime: number;
+  /** Animated GIF (Giphy) — looped via -stream_loop on export. */
+  animated?: boolean;
 }
 
 export type Overlay = TextOverlay | StickerOverlay;
@@ -50,10 +46,23 @@ export type Overlay = TextOverlay | StickerOverlay;
 export interface AudioTrack {
   id: string;
   uri: string;
+  /** Display name (file name or Giphy/track title). */
+  title?: string;
+  /** Delay (seconds) before the track starts on the OUTPUT timeline —
+   * i.e. how long into the video before the music kicks in. Not to be
+   * confused with trimStart (below), which picks a point in the SOURCE file. */
   startTime: number;
+  /** Full length (seconds) of the source audio file, as probed. */
   duration: number;
+  /** Where in the source file playback begins (seconds) — the IG-style
+   * "which 22 seconds of this song" trim window picked in MusicSheet.
+   * Defaults to 0 (start of the file). */
+  trimStart: number;
   volume: number;
-  type: 'music' | 'voiceover';
+  type: 'music';
+  /** User-toggled mute on the music track itself (independent of the
+   * original video's own mute state — see EditorState.originalMuted). */
+  muted: boolean;
 }
 
 // --- Filters ---
@@ -73,37 +82,6 @@ export type FilterPreset =
 
 export interface FilterState {
   preset: FilterPreset;
-  intensity: number; // 0-1
-}
-
-// --- Effects ---
-
-export type EffectType =
-  | 'zoom_in'
-  | 'zoom_out'
-  | 'glitch'
-  | 'vhs'
-  | 'soul'
-  | 'shake'
-  | 'flash';
-
-export interface Effect {
-  id: string;
-  type: EffectType;
-  startTime: number;
-  duration: number;
-  intensity: number; // 0-1
-}
-
-// --- Crop ---
-
-export type CropPreset = 'original' | '1:1' | '4:5' | '9:16' | '16:9';
-
-export interface CropRegion {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
 // --- Export ---
@@ -120,6 +98,12 @@ export interface ExportConfig {
   resolution?: { width: number; height: number };
   /** Screen width used during preview — needed to scale text font sizes to video resolution */
   previewWidth?: number;
+  /**
+   * Text overlays rasterized to PNGs at export time (Skia view snapshots).
+   * The shipped FFmpeg builds have no freetype/drawtext, so text is burned
+   * in as image overlays — which also makes it pixel-identical to preview.
+   */
+  rasterizedTexts?: StickerOverlay[];
   onProgress?: (progress: number) => void;
 }
 
@@ -134,86 +118,73 @@ export interface ExportResult {
 // --- Editor Config ---
 
 export interface FeatureConfig {
-  trim?: boolean;
-  split?: boolean;
-  speed?: boolean;
-  volume?: boolean;
-  crop?: boolean;
-  rotate?: boolean;
-  audio?: boolean;
-  voiceover?: boolean;
   text?: boolean;
   filters?: boolean;
-  effects?: boolean;
   stickers?: boolean;
+  music?: boolean;
 }
 
 export interface ThemeConfig {
   backgroundColor?: string;
   accentColor?: string;
   textColor?: string;
-  toolbarColor?: string;
-  iconColor?: string;
 }
 
 export interface EditorConfig {
   features?: FeatureConfig;
   export?: Omit<ExportConfig, 'onProgress'>;
   theme?: ThemeConfig;
+  /** Giphy API key for the sticker picker; without it, stickers fall back to the photo library. */
+  giphyApiKey?: string;
 }
 
-// --- Editor Mode ---
+// --- UI sheets ---
 
-export type EditorMode =
-  | 'edit'
-  | 'audio'
-  | 'text'
-  | 'filters'
-  | 'effects'
-  | 'stickers';
+export type EditorSheet = 'none' | 'text' | 'stickers' | 'music';
 
 // --- Editor State ---
 
 export interface EditorState {
   // Source
   sourceUri: string;
+  sourceType: SourceType;
+  /** Video: probed clip length. Image: fixed at IMAGE_SOURCE_DURATION_SECONDS. */
   sourceDuration: number;
   sourceWidth: number;
   sourceHeight: number;
-
-  // Segments
-  segments: VideoSegment[];
+  /** False for a video with no audio track (silent recordings) — export
+   * must skip any `[0:a]`-referencing filter graph for these. Always true
+   * for an image source (no audio concept applies). */
+  sourceHasAudio: boolean;
 
   // Playback
   currentTime: number;
   isPlaying: boolean;
 
-  // Overlays
+  // Edits
+  filter: FilterState;
   textOverlays: TextOverlay[];
   stickerOverlays: StickerOverlay[];
-
-  // Audio
-  audioTracks: AudioTrack[];
-  originalVolume: number;
-
-  // Effects
-  effects: Effect[];
-
-  // Crop
-  crop: CropRegion | null;
+  musicTrack: AudioTrack | null;
+  /** Whether the original video's own audio is silent. Auto-set true the
+   * moment music is added and restored to its pre-music value when music is
+   * removed — see editor-store's setMusic/removeMusic. */
+  originalMuted: boolean;
+  /**
+   * originalMuted's value from just before a music track was added, so
+   * removeMusic can restore it exactly (rather than always unmuting, which
+   * would incorrectly un-mute a video the user had deliberately muted
+   * BEFORE adding music). Null when no music track is active.
+   */
+  originalMutedBeforeMusic: boolean | null;
 
   // UI
-  activeMode: EditorMode;
-  selectedSegmentId: string | null;
   selectedOverlayId: string | null;
+  activeSheet: EditorSheet;
 
   // Export
   isExporting: boolean;
   exportProgress: number;
-
-  // Undo/Redo
-  canUndo: boolean;
-  canRedo: boolean;
 }
 
 // --- Utility ---

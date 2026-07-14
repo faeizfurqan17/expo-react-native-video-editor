@@ -14,22 +14,18 @@ export { createEditorStore } from './store/editor-store';
 export type { EditorStore, EditorActions } from './store/editor-store';
 
 // Filters
-export { FILTER_PRESETS, applyIntensity, getFilterByPreset, IDENTITY_MATRIX } from './filters/presets';
+export { FILTER_PRESETS, getFilterByPreset, IDENTITY_MATRIX } from './filters/presets';
 export type { FilterDefinition } from './filters/presets';
 
 // Types
 export type {
-  VideoSegment,
   TextOverlay,
   StickerOverlay,
   Overlay,
   AudioTrack,
   FilterPreset,
   FilterState,
-  EffectType,
-  Effect,
-  CropPreset,
-  CropRegion,
+  SourceType,
   ExportQuality,
   ExportFormat,
   ExportConfig,
@@ -37,10 +33,11 @@ export type {
   FeatureConfig,
   ThemeConfig,
   EditorConfig,
-  EditorMode,
+  EditorSheet,
   EditorState,
 } from './core/types';
+export { IMAGE_SOURCE_DURATION_SECONDS } from './core/types';
 
 // Utils
 export { formatTime, formatTimestamp, clamp } from './utils/time';
-export { generateThumbnails } from './utils/thumbnails';
+export { fitRect, clamp01 } from './utils/layout';

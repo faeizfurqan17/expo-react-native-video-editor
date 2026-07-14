@@ -7,12 +7,15 @@
     "example"
   ],
   "scripts": {
-    "build": "yarn workspace @anthropic/react-native-video-editor build",
+    "build": "yarn workspace @faeizfurqan/expo-story-video-and-image-editor build",
     "example": "yarn workspace video-editor-example start",
-    "lint": "yarn workspace @anthropic/react-native-video-editor lint",
-    "typecheck": "yarn workspace @anthropic/react-native-video-editor typecheck"
+    "lint": "yarn workspace @faeizfurqan/expo-story-video-and-image-editor lint",
+    "typecheck": "yarn workspace @faeizfurqan/expo-story-video-and-image-editor typecheck",
+    "postinstall": "patch-package"
   },
   "devDependencies": {
+    "patch-package": "^8.0.1",
+    "postinstall-postinstall": "^2.1.0",
     "typescript": "^5.3.0"
   },
   "engines": {

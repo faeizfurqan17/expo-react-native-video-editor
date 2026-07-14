@@ -49,6 +49,9 @@ cd example && npx expo start --dev-client
 
 # Build library
 cd packages/video-editor && yarn build
+
+# Unit tests (command builder, store, playback-sync, effect-preview)
+yarn test
 ```
 
 ## Read These Docs

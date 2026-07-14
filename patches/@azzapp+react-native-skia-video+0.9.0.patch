@@ -1,0 +1,372 @@
+diff --git a/node_modules/@azzapp/react-native-skia-video/android/src/main/java/com/azzapp/rnskv/VideoPlayer.java b/node_modules/@azzapp/react-native-skia-video/android/src/main/java/com/azzapp/rnskv/VideoPlayer.java
+index 9e6d6ef..7d7e5ed 100644
+--- a/node_modules/@azzapp/react-native-skia-video/android/src/main/java/com/azzapp/rnskv/VideoPlayer.java
++++ b/node_modules/@azzapp/react-native-skia-video/android/src/main/java/com/azzapp/rnskv/VideoPlayer.java
+@@ -132,6 +132,15 @@ public class VideoPlayer {
+           isPlaying = playing;
+           dispatchEventIfNoReleased("playingStatusChange", playing);
+         }
++
++        @Override
++        public void onVideoSizeChanged(VideoSize videoSize) {
++          videoWidth = videoSize.width;
++          videoHeight = videoSize.height;
++          if (isInitialized && videoWidth > 0 && videoHeight > 0) {
++            handleReady();
++          }
++        }
+       });
+ 
+       player.prepare();
+diff --git a/node_modules/@azzapp/react-native-skia-video/ios/MTLTextureUtils.h b/node_modules/@azzapp/react-native-skia-video/ios/MTLTextureUtils.h
+index 3f70367..2c65f52 100644
+--- a/node_modules/@azzapp/react-native-skia-video/ios/MTLTextureUtils.h
++++ b/node_modules/@azzapp/react-native-skia-video/ios/MTLTextureUtils.h
+@@ -6,6 +6,8 @@
+ //
+ 
+ #import <Foundation/Foundation.h>
++#import <Metal/Metal.h>
++#import <CoreVideo/CoreVideo.h>
+ 
+ NS_ASSUME_NONNULL_BEGIN
+ 
+@@ -13,6 +15,18 @@ NS_ASSUME_NONNULL_BEGIN
+ 
+ + (nullable id<MTLTexture>)createMTLTextureForVideoOutput:(CGSize)size;
+ + (void)updateTexture:(id<MTLTexture>)texture with:(CVPixelBufferRef)buffer;
++// Non-blocking variant: submits the GPU blit and returns immediately instead
++// of calling waitUntilCompleted (a per-frame main-thread stall that gets
++// worse with larger textures/heavier sources — see RNSVVideoPlayer.mm's
++// double-buffered use of this). `completion` fires once the copy has
++// actually landed in `texture`, so callers must not read `texture` as
++// up-to-date before then; it's safe to keep reading its PREVIOUS contents
++// in the meantime (this never writes partial/torn data — the underlying
++// blit is still a single atomic GPU operation, only the CPU-side wait is
++// removed).
+++ (void)updateTextureAsync:(id<MTLTexture>)texture
++                       with:(CVPixelBufferRef)buffer
++                 completion:(void (^)(void))completion;
+ @end
+ 
+ NS_ASSUME_NONNULL_END
+diff --git a/node_modules/@azzapp/react-native-skia-video/ios/MTLTextureUtils.mm b/node_modules/@azzapp/react-native-skia-video/ios/MTLTextureUtils.mm
+index 5297d22..aa16544 100644
+--- a/node_modules/@azzapp/react-native-skia-video/ios/MTLTextureUtils.mm
++++ b/node_modules/@azzapp/react-native-skia-video/ios/MTLTextureUtils.mm
+@@ -7,6 +7,7 @@
+ 
+ #import "MTLTextureUtils.h"
+ #import <Metal/Metal.h>
++#import <QuartzCore/QuartzCore.h>
+ #import <stdexcept>
+ 
+ @implementation MTLTextureUtils
+@@ -106,4 +107,75 @@ + (void)updateTexture:(id<MTLTexture>)mtlTexture
+   CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+ }
+ 
+++ (void)updateTextureAsync:(id<MTLTexture>)mtlTexture
++                       with:(CVPixelBufferRef)pixelBuffer
++                 completion:(void (^)(void))completion {
++  CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
++
++  size_t width = CVPixelBufferGetWidth(pixelBuffer);
++  size_t height = CVPixelBufferGetHeight(pixelBuffer);
++
++  if (width > mtlTexture.width || height > mtlTexture.height) {
++    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
++    throw std::runtime_error(
++        "Pixel buffer dimensions exceed texture dimensions!");
++  }
++
++  CVMetalTextureRef cvMetalTexture = NULL;
++  CVReturn status = CVMetalTextureCacheCreateTextureFromImage(
++      NULL, getMetalTextureCache(), pixelBuffer, NULL, MTLPixelFormatBGRA8Unorm,
++      width, height, 0, &cvMetalTexture);
++
++  if (status != kCVReturnSuccess || !cvMetalTexture) {
++    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
++    throw std::runtime_error(
++        "Failed to create Metal texture from CVPixelBuffer!");
++  }
++
++  id<MTLTexture> tempTexture = CVMetalTextureGetTexture(cvMetalTexture);
++
++  auto commandQueue = getCommandQueue();
++  id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
++  id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
++
++  MTLRegion region = MTLRegionMake2D(0, 0, width, height);
++
++  [blitEncoder copyFromTexture:tempTexture
++                   sourceSlice:0
++                   sourceLevel:0
++                  sourceOrigin:region.origin
++                    sourceSize:region.size
++                     toTexture:mtlTexture
++              destinationSlice:0
++              destinationLevel:0
++             destinationOrigin:region.origin];
++
++  [blitEncoder endEncoding];
++
++  // NOTE: no waitUntilCompleted here — that was a per-frame main-thread
++  // stall proportional to buffer size, which compounds under load (heavy
++  // source -> slower blit -> more time blocked -> fewer decodeNextFrame
++  // calls actually get through -> looks "stuck" to callers even though the
++  // decoder is still making progress). The completion handler fires on an
++  // internal Metal dispatch queue once the copy has actually landed; the
++  // pixel buffer and temp CV texture must stay alive until then, so they're
++  // released inside the handler rather than immediately after commit.
++  CFTimeInterval commitTime = CACurrentMediaTime();
++  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
++    // [diag] commit->completed latency; log only when the GPU copy itself is
++    // slow enough to matter (it shouldn't be — this identifies GPU contention
++    // if it is).
++    CFTimeInterval blitMs = (CACurrentMediaTime() - commitTime) * 1000.0;
++    if (blitMs > 8.0) {
++      NSLog(@"[skia-video][diag] blit commit->completed took %.1fms", blitMs);
++    }
++    CFRelease(cvMetalTexture);
++    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
++    if (completion) {
++      completion();
++    }
++  }];
++  [commandBuffer commit];
++}
++
+ @end
+diff --git a/node_modules/@azzapp/react-native-skia-video/ios/RNSVVideoPlayer.mm b/node_modules/@azzapp/react-native-skia-video/ios/RNSVVideoPlayer.mm
+index 82dc642..21d6777 100644
+--- a/node_modules/@azzapp/react-native-skia-video/ios/RNSVVideoPlayer.mm
++++ b/node_modules/@azzapp/react-native-skia-video/ios/RNSVVideoPlayer.mm
+@@ -17,7 +17,19 @@
+ @implementation RNSVVideoPlayer {
+   AVPlayer* _player;
+   AVPlayerItemVideoOutput* _videoOutput;
+-  id<MTLTexture> _mtlTexture;
++  // Double-buffered: getNextTextureForTime: always returns _mtlTextureFront
++  // immediately (last frame whose GPU copy is guaranteed complete) while any
++  // new pixel buffer is copied asynchronously into _mtlTextureBack; once
++  // that copy lands, the completion handler swaps front<->back. This avoids
++  // blocking the calling (UI) thread on the GPU per frame — see
++  // MTLTextureUtils.mm's updateTextureAsync: for why that blocking wait was
++  // a real perf problem on heavy sources. _textureSwapLock guards the swap
++  // since the completion handler runs on an internal Metal dispatch queue,
++  // not the thread that calls getNextTextureForTime:.
++  id<MTLTexture> _mtlTextureFront;
++  id<MTLTexture> _mtlTextureBack;
++  Boolean _backTextureCopyInFlight;
++  NSLock* _textureSwapLock;
+   CADisplayLink* _displayLink;
+   id<RNSVVideoPlayerDelegate> _delegate;
+   Boolean _complete;
+@@ -31,6 +43,8 @@ - (instancetype)initWithURL:(NSURL*)url
+   _delegate = delegate;
+   _complete = NO;
+   _waitingForFrame = YES;
++  _textureSwapLock = [[NSLock alloc] init];
++  _backTextureCopyInFlight = NO;
+ 
+   AVAsset* asset = [AVAsset assetWithURL:url];
+   self.resolution = resolution;
+@@ -107,23 +121,83 @@ - (void)setPlaybackSpeed:(float)playbackSpeed {
+ }
+ 
+ - (nullable id<MTLTexture>)getNextTextureForTime:(CMTime)time {
+-  id<MTLTexture> texture = NULL;
+-  if ([_videoOutput hasNewPixelBufferForItemTime:time]) {
++  // Kick off a copy of any new pixel buffer into the BACK texture
++  // asynchronously (never blocks this call), but only if the previous back
++  // copy has already landed — otherwise we'd race two blits into the same
++  // texture. If one's still in flight, this call just falls through to
++  // returning the current front texture (last complete frame) below, same
++  // as if there were no new buffer yet; the next call will pick up the
++  // pending pixel buffer's successor once the in-flight copy finishes.
++  //
++  // No hasNewPixelBufferForItemTime: re-check here — the JSI caller
++  // (VideoPlayerHostObject.mm's decodeNextFrame) only invokes this method
++  // once displayLinkFired: has already confirmed a new buffer was available
++  // for this exact time via that same call. Re-querying it here is a second
++  // AVFoundation round-trip for the same answer on every call, up to 120x/s
++  // on ProMotion displays — copyPixelBufferForItemTime: below already
++  // returns nil harmlessly if the buffer is no longer available by the time
++  // we get here, so the query added nothing but redundant work.
++  [_textureSwapLock lock];
++  BOOL copyInFlight = _backTextureCopyInFlight;
++  [_textureSwapLock unlock];
++
++  if (!copyInFlight) {
++    // [diag] copyPixelBufferForItemTime: is where AVFoundation performs the
++    // HDR->SDR tone-map, downscale, and 10-bit->BGRA conversion for heavy
++    // sources — and it runs synchronously on this (UI) thread. Timed here to
++    // confirm/exclude it as the lag source; log only when slow.
++    CFTimeInterval copyStart = CACurrentMediaTime();
+     auto buffer = [_videoOutput copyPixelBufferForItemTime:time
+                                         itemTimeForDisplay:nil];
++    CFTimeInterval copyMs = (CACurrentMediaTime() - copyStart) * 1000.0;
++    if (copyMs > 5.0) {
++      NSLog(@"[skia-video][diag] copyPixelBufferForItemTime took %.1fms",
++            copyMs);
++    }
+     if (buffer) {
+       size_t width = CVPixelBufferGetWidth(buffer);
+       size_t height = CVPixelBufferGetHeight(buffer);
+-      if (!_mtlTexture || width != _mtlTexture.width ||
+-          height != _mtlTexture.height) {
+-        _mtlTexture = [MTLTextureUtils
++      if (!_mtlTextureBack || width != _mtlTextureBack.width ||
++          height != _mtlTextureBack.height ||
++          _mtlTextureBack == _mtlTextureFront) {
++        _mtlTextureBack = [MTLTextureUtils
+             createMTLTextureForVideoOutput:CGSizeMake(width, height)];
+       }
+-      [MTLTextureUtils updateTexture:_mtlTexture with:buffer];
+-      CVPixelBufferRelease(buffer);
+-      texture = _mtlTexture;
++
++      [_textureSwapLock lock];
++      _backTextureCopyInFlight = YES;
++      [_textureSwapLock unlock];
++
++      id<MTLTexture> backTextureForThisCopy = _mtlTextureBack;
++      __weak RNSVVideoPlayer* weakSelf = self;
++      [MTLTextureUtils
++          updateTextureAsync:backTextureForThisCopy
++                        with:buffer
++                  completion:^{
++                    // Runs on an internal Metal dispatch queue, not the
++                    // caller's thread — the lock protects the swap against
++                    // a concurrent getNextTextureForTime: call.
++                    CVPixelBufferRelease(buffer);
++                    __strong RNSVVideoPlayer* strongSelf = weakSelf;
++                    if (!strongSelf || strongSelf->_disposed) return;
++                    [strongSelf->_textureSwapLock lock];
++                    // True swap: the old front becomes the next back target,
++                    // so successive copies alternate between two textures and
++                    // never write into the one currently exposed to Skia.
++                    // (Without this, front == back after the first swap and
++                    // every blit races Skia's reads on a shared texture.)
++                    id<MTLTexture> oldFront = strongSelf->_mtlTextureFront;
++                    strongSelf->_mtlTextureFront = backTextureForThisCopy;
++                    strongSelf->_mtlTextureBack = oldFront;
++                    strongSelf->_backTextureCopyInFlight = NO;
++                    [strongSelf->_textureSwapLock unlock];
++                  }];
+     }
+   }
++
++  [_textureSwapLock lock];
++  id<MTLTexture> texture = _mtlTextureFront;
++  [_textureSwapLock unlock];
+   return texture;
+ }
+ 
+@@ -325,6 +399,24 @@ - (void)dispatchReadyToPlay {
+     int rotation =
+         RNSkiaVideo::AVAssetTrackUtils::GetTrackRotationInDegree(track);
+ 
++    // `width`/`height` above come from presentationSize, which is
++    // rotation-CORRECTED (e.g. a portrait clip reports portrait dims here
++    // even though the raw encoded buffer is landscape). But
++    // decodeNextFrame() reports the ACTUAL DECODED TEXTURE's raw dimensions
++    // (storage orientation, un-rotated) alongside this same `rotation` value
++    // — see VideoPlayerHostObject.mm. Those two must describe the same
++    // orientation convention (raw dims + a rotation to apply), or JS ends up
++    // computing a fit/rotation transform sized for one orientation while
++    // drawing pixel data in the other, which visibly squeezes/stretches the
++    // frame. Un-rotate width/height back to raw storage orientation here so
++    // this event matches decodeNextFrame's convention.
++    CGFloat rawWidth = width;
++    CGFloat rawHeight = height;
++    if (rotation == 90 || rotation == 270) {
++      rawWidth = height;
++      rawHeight = width;
++    }
++
+     // The player may be initialized but still needs to determine the duration.
+     CMTime duration = currentItem.duration;
+     if (CMTIME_IS_INDEFINITE(duration) || duration.timescale == 0 ||
+@@ -334,8 +426,8 @@ - (void)dispatchReadyToPlay {
+ 
+     _isInitialized = YES;
+     [_delegate readyToPlay:@{
+-      @"width" : @(width),
+-      @"height" : @(height),
++      @"width" : @(rawWidth),
++      @"height" : @(rawHeight),
+       @"rotation" : @(rotation)
+     }];
+   }
+diff --git a/node_modules/@azzapp/react-native-skia-video/ios/VideoPlayerHostObject.mm b/node_modules/@azzapp/react-native-skia-video/ios/VideoPlayerHostObject.mm
+index f4f06ba..2a44485 100644
+--- a/node_modules/@azzapp/react-native-skia-video/ios/VideoPlayerHostObject.mm
++++ b/node_modules/@azzapp/react-native-skia-video/ios/VideoPlayerHostObject.mm
+@@ -63,8 +63,53 @@
+             return jsi::Value::null();
+           }
+           lastFrameDrawn = lastFrameAvailable;
+-          currentFrame =
+-              std::make_shared<VideoFrame>(texture, width, height, rotation);
++          // `width`/`height` are cached from dispatchReadyToPlay, already
++          // un-rotated back to RAW storage orientation there (e.g. a
++          // portrait clip's raw encoded buffer is landscape 3840x2160 with
++          // rotation=90) — see RNSVVideoPlayer.mm. JS's fitbox expects
++          // exactly that pair (raw dims + a rotation to apply) and rotates
++          // it into portrait itself; see the comment in video-preview.tsx's
++          // skiaFrameTransform.
++          //
++          // AVPlayerItemVideoOutput's actual CVPixelBuffer — and therefore
++          // this Metal texture — is NOT guaranteed to match that raw
++          // orientation: for HDR/wide-gamut sources, the SDR tone-map
++          // conversion path can hand back a buffer that's ALREADY
++          // rotation-corrected (portrait pixels) instead of raw. Reporting
++          // rotation=90 alongside an already-rotated frame makes JS rotate
++          // it a second time, stretching it into the wrong aspect. The
++          // texture's own width/height are ground truth (read straight off
++          // the real pixel buffer) — always report those (never the cached
++          // width/height, which may be stale after a mid-stream format
++          // change), and only pass rotation through when the texture is
++          // confirmed to still be in the RAW orientation (i.e. its
++          // dimensions match the cached raw width/height, not swapped). If
++          // the texture doesn't match raw — meaning it came back already
++          // rotated — report rotation=0 so JS does not rotate it again.
++          float frameWidth = (float)texture.width;
++          float frameHeight = (float)texture.height;
++          int frameRotation = rotation;
++          if ((rotation == 90 || rotation == 270) &&
++              texture.width == (NSUInteger)llround(height) &&
++              texture.height == (NSUInteger)llround(width)) {
++            // Texture is swapped relative to the cached RAW dims — i.e. it
++            // already came back rotation-corrected — don't rotate it again.
++            frameRotation = 0;
++          }
++          // TEMP DIAGNOSTIC — remove once the stretch bug is confirmed fixed.
++          static bool loggedOnce = false;
++          if (!loggedOnce) {
++            loggedOnce = true;
++            NSLog(@"[skia-video][diag] decodeNextFrame texture=%lux%lu "
++                  @"cached=%fx%f rotation(cached)=%d -> "
++                  @"reporting=%fx%f rotation(sent)=%d",
++                  (unsigned long)texture.width, (unsigned long)texture.height,
++                  width, height, rotation, frameWidth, frameHeight,
++                  frameRotation);
++          }
++          currentFrame = std::make_shared<VideoFrame>(texture, frameWidth,
++                                                        frameHeight,
++                                                        frameRotation);
+           return jsi::Object::createFromHostObject(runtime, currentFrame);
+         });
+   } else if (propName == "play") {
+@@ -193,6 +238,9 @@
+   this->width = width;
+   this->height = height;
+   this->rotation = rotation;
++  // TEMP DIAGNOSTIC — remove once the stretch bug is confirmed fixed.
++  NSLog(@"[skia-video][diag] readyToPlay width=%f height=%f rotation=%d",
++        width, height, rotation);
+ }
+ 
+ void VideoPlayerHostObject::release() {

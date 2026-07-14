@@ -1,400 +1,406 @@
+import { Platform } from 'react-native';
 import type {
-  VideoSegment,
-  TextOverlay,
   StickerOverlay,
   AudioTrack,
   FilterPreset,
-  Effect,
-  CropRegion,
   ExportQuality,
+  SourceType,
 } from './types';
-import { applyIntensity, getFilterByPreset } from '../filters/presets';
+import { IMAGE_SOURCE_DURATION_SECONDS } from './types';
+import { getFilterByPreset } from '../filters/presets';
 
 /**
- * Builds FFmpeg command strings for all video editing operations.
- * Used by ExportPipeline to generate the final FFmpeg command.
+ * Builds FFmpeg command strings for the Stories-style export:
+ * one clip, color-matrix filter + text + stickers burned in, music mixed.
+ * Used by ExportPipeline to generate the single export command.
  */
 export class FFmpegCommandBuilder {
-  // --- Trim ---
-
-  static trim(inputPath: string, outputPath: string, start: number, end: number): string {
-    return `-i "${inputPath}" -ss ${start.toFixed(3)} -to ${end.toFixed(3)} -c copy "${outputPath}"`;
-  }
-
-  // --- Speed ---
-
-  static speed(factor: number): string {
-    if (factor === 1) return '';
-
-    const videoPts = `setpts=${(1 / factor).toFixed(4)}*PTS`;
-
-    // atempo only supports 0.5-100.0 range
-    // For extreme speeds, chain multiple atempo filters
-    const audioFilters: string[] = [];
-    let remaining = factor;
-    while (remaining > 2.0) {
-      audioFilters.push('atempo=2.0');
-      remaining /= 2.0;
-    }
-    while (remaining < 0.5) {
-      audioFilters.push('atempo=0.5');
-      remaining /= 0.5;
-    }
-    audioFilters.push(`atempo=${remaining.toFixed(4)}`);
-
-    return `-filter:v "${videoPts}" -filter:a "${audioFilters.join(',')}"`;
-  }
-
-  // --- Volume ---
-
-  static volume(level: number): string {
-    if (level === 1) return '';
-    return `-filter:a "volume=${level.toFixed(2)}"`;
-  }
-
-  // --- Crop ---
-
-  static crop(region: CropRegion): string {
-    return `crop=${Math.round(region.width)}:${Math.round(region.height)}:${Math.round(region.x)}:${Math.round(region.y)}`;
-  }
-
-  // --- Rotate ---
-
-  static rotate(degrees: 0 | 90 | 180 | 270): string {
-    switch (degrees) {
-      case 0:
-        return '';
-      case 90:
-        return 'transpose=1';
-      case 180:
-        return 'transpose=1,transpose=1';
-      case 270:
-        return 'transpose=2';
-    }
-  }
-
-  // --- Color Conversion ---
-
   /**
-   * Convert any CSS color to FFmpeg-safe hex format.
-   * FFmpeg doesn't support # (comment char) or rgba() (commas break filter parsing).
-   * Output: 0xRRGGBB or 0xRRGGBBAA
+   * Quote a file path/URI for embedding in a command string. Paths go inside
+   * double quotes; embedded double quotes are escaped. content:// and
+   * non-ASCII URIs pass through untouched (colons are safe when quoted).
    */
-  private static toFFmpegColor(color: string): string {
-    // #RRGGBB or #RRGGBBAA → 0xRRGGBB / 0xRRGGBBAA
-    if (color.startsWith('#')) {
-      return color.replace('#', '0x');
-    }
-
-    // rgba(r, g, b, a) → 0xRRGGBBAA
-    const rgbaMatch = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/);
-    if (rgbaMatch) {
-      const r = parseInt(rgbaMatch[1]).toString(16).padStart(2, '0');
-      const g = parseInt(rgbaMatch[2]).toString(16).padStart(2, '0');
-      const b = parseInt(rgbaMatch[3]).toString(16).padStart(2, '0');
-      if (rgbaMatch[4] !== undefined) {
-        const a = Math.round(parseFloat(rgbaMatch[4]) * 255).toString(16).padStart(2, '0');
-        return `0x${r}${g}${b}${a}`;
-      }
-      return `0x${r}${g}${b}`;
-    }
-
-    // Named colors or already 0x — pass through
-    return color;
+  static quotePath(p: string): string {
+    // FFmpeg's file protocol handles file:// URIs inconsistently across
+    // builds (Android especially) — strip the scheme, keep the raw path.
+    const path = p.startsWith('file://') ? p.slice(7) : p;
+    return `"${path.replace(/"/g, '\\"')}"`;
   }
 
-  // --- Text Overlay ---
-
-  static drawText(
-    overlay: TextOverlay,
-    videoWidth: number,
-    videoHeight: number,
-    previewWidth?: number,
-    /** Segment start in source time — enable window is segment-local after `-ss`. */
-    timeOffset: number = 0,
-    /** Segment speed — setpts divides output timestamps, so enable scales too. */
-    speed: number = 1
-  ): string {
-    const escapedText = overlay.text.replace(/'/g, "\\'").replace(/:/g, '\\:');
-
-    // Scale fontSize from preview coordinates to actual video resolution.
-    // In preview, text is rendered at (fontSize * scale) on a screen-width canvas.
-    // FFmpeg renders at full video resolution, so we need to scale up proportionally.
-    const scaleFactor = previewWidth && previewWidth > 0 ? videoWidth / previewWidth : 1;
-    const exportFontSize = Math.round(overlay.fontSize * overlay.scale * scaleFactor);
-
-    const fontColor = this.toFFmpegColor(overlay.color);
-
-    // Preview anchors the text box at its center (position = center, normalized).
-    // Mirror that here so export placement matches: x/y are top-left, so subtract
-    // half the rendered text box (text_w/text_h are evaluated by FFmpeg at runtime).
-    const px = overlay.position.x.toFixed(4);
-    const py = overlay.position.y.toFixed(4);
-
-    let filter = `drawtext=text='${escapedText}'`;
-    filter += `:fontsize=${exportFontSize}`;
-    filter += `:fontcolor=${fontColor}`;
-    filter += `:x=${px}*w-text_w/2`;
-    filter += `:y=${py}*h-text_h/2`;
-
-    if (overlay.backgroundColor) {
-      const bgColor = this.toFFmpegColor(overlay.backgroundColor);
-      const scaledPadding = Math.round(8 * scaleFactor);
-      filter += `:box=1:boxcolor=${bgColor}:boxborderw=${scaledPadding}`;
-    }
-
-    // Segment is cut with `-ss timeOffset`, so FFmpeg's clock restarts at 0 for this
-    // segment. Convert the overlay's source-time window into segment-local time, then
-    // divide by speed (setpts compresses/stretches the output timeline). Clamp to >=0
-    // so overlays spanning a split boundary still show on each kept piece.
-    const safeSpeed = speed > 0 ? speed : 1;
-    const localStart = Math.max(0, (overlay.startTime - timeOffset) / safeSpeed);
-    const localEnd = Math.max(0, (overlay.endTime - timeOffset) / safeSpeed);
-    filter += `:enable='between(t,${localStart.toFixed(3)},${localEnd.toFixed(3)})'`;
-
-    return filter;
-  }
+  // NOTE: no drawtext here on purpose — the shipped ffmpeg-kit flavors
+  // (min/https, LGPL) are built without freetype, so the drawtext filter does
+  // not exist. Text overlays are rasterized to PNGs with Skia at export time
+  // (pixel-identical to the preview) and composited via overlayImage below.
 
   // --- Sticker/Image Overlay ---
 
+  /**
+   * Input args + filter chain fragment for one sticker.
+   * Animated GIFs loop for the clip's duration via -stream_loop -1
+   * (paired with -shortest on the output so the export still ends with the video).
+   */
   static overlayImage(
     overlay: StickerOverlay,
     inputIndex: number,
     videoWidth: number,
     videoHeight: number,
-    /** Segment start in source time — enable window is segment-local after `-ss`. */
-    timeOffset: number = 0,
-    /** Segment speed — setpts on the base stream rescales timestamps. */
-    speed: number = 1
-  ): { inputs: string; filter: string } {
-    const x = Math.round(overlay.position.x * videoWidth);
-    const y = Math.round(overlay.position.y * videoHeight);
-    const w = Math.round(overlay.size.width * overlay.scale);
-    const h = Math.round(overlay.size.height * overlay.scale);
+    previewWidth?: number
+  ): { inputs: string; scale: string; overlay: string } {
+    // Preview positions/sizes stickers in screen px on a previewWidth-wide canvas;
+    // scale everything up to video resolution.
+    const scaleFactor = previewWidth && previewWidth > 0 ? videoWidth / previewWidth : 1;
+    const cx = Math.round(overlay.position.x * videoWidth);
+    const cy = Math.round(overlay.position.y * videoHeight);
+    const w = Math.max(2, Math.round(overlay.size.width * overlay.scale * scaleFactor));
+    const h = Math.max(2, Math.round(overlay.size.height * overlay.scale * scaleFactor));
+    
+    // FFmpeg's overlay filter places the top-left corner at x:y.
+    // The UI records `position` as the center of the sticker, so we subtract half the size.
+    const x = cx - Math.round(w / 2);
+    const y = cy - Math.round(h / 2);
 
-    const safeSpeed = speed > 0 ? speed : 1;
-    const localStart = Math.max(0, (overlay.startTime - timeOffset) / safeSpeed);
-    const localEnd = Math.max(localStart, (overlay.endTime - timeOffset) / safeSpeed);
+    const loop = overlay.animated ? '-stream_loop -1 ' : '';
+    const inputs = `${loop}-i ${this.quotePath(overlay.uri)}`;
 
-    const inputs = `-i "${overlay.uri}"`;
     const scaleLabel = `s${inputIndex}`;
-    const filter =
-      `[${inputIndex}:v]scale=${w}:${h}[${scaleLabel}];` +
-      `[0:v][${scaleLabel}]overlay=${x}:${y}:enable='between(t,${localStart.toFixed(3)},${localEnd.toFixed(3)})'`;
+    const rotate =
+      Math.abs(overlay.rotation) > 0.01
+        ? `,rotate=${((overlay.rotation * Math.PI) / 180).toFixed(5)}:c=none:ow=rotw(${((overlay.rotation * Math.PI) / 180).toFixed(5)}):oh=roth(${((overlay.rotation * Math.PI) / 180).toFixed(5)})`
+        : '';
+    const scale = `[${inputIndex}:v]scale=${w}:${h}${rotate}[${scaleLabel}]`;
 
-    return { inputs, filter };
+    // shortest=1 ONLY for looped GIFs: it stops the overlay when the main video
+    // ends (the looped GIF never ends on its own). For static images it would
+    // do the opposite — a PNG is a 1-frame stream, so shortest=1 terminates the
+    // whole output after that single frame (~0.04s video). Static images rely
+    // on overlay's default repeatlast=1 instead.
+    let ov = overlay.animated ? `overlay=${x}:${y}:shortest=1` : `overlay=${x}:${y}`;
+    if (overlay.startTime > 0.001 || overlay.endTime > 0.001) {
+      ov += `:enable='between(t,${Math.max(0, overlay.startTime).toFixed(3)},${Math.max(0, overlay.endTime).toFixed(3)})'`;
+    }
+
+    return { inputs, scale, overlay: ov };
   }
 
-  // --- Audio Mix ---
+  // --- Audio ---
 
-  static audioMix(
-    tracks: AudioTrack[],
-    originalVolume: number
+  /**
+   * Audio graph for original + optional music track.
+   * Muted original becomes volume=0 (kept in the mix so timestamps stay aligned).
+   * Returns '' when nothing needs processing (no music, not muted).
+   *
+   * A still-image source, or a video recorded/saved with no audio track
+   * (silent screen recordings, mic-off captures), has no `[0:a]` original
+   * audio stream at all (there's nothing to mute/mix), so
+   * `hasOriginalAudio: false` skips straight to the music-only leg —
+   * referencing a nonexistent `[0:a]` would fail with "Stream specifier
+   * '0:a' in filtergraph ... matches no streams".
+   */
+  static audioGraph(
+    music: AudioTrack | null,
+    originalMuted: boolean,
+    musicInputIndex: number = 1,
+    hasOriginalAudio: boolean = true
   ): string {
-    if (tracks.length === 0 && originalVolume === 1) return '';
+    const musicVol = music && !music.muted ? music.volume : 0;
 
-    const parts: string[] = [];
+    if (!hasOriginalAudio) {
+      if (!music) return '';
+      const delayMs = Math.max(0, Math.round(music.startTime * 1000));
+      return `[${musicInputIndex}:a]volume=${musicVol.toFixed(2)},adelay=${delayMs}|${delayMs}[aout]`;
+    }
 
-    // Original audio with volume
-    parts.push(`[0:a]volume=${originalVolume.toFixed(2)}[a0]`);
+    if (!music && !originalMuted) return '';
 
-    // Additional audio tracks
-    tracks.forEach((track, i) => {
-      parts.push(
-        `[${i + 1}:a]volume=${track.volume.toFixed(2)},adelay=${Math.round(track.startTime * 1000)}|${Math.round(track.startTime * 1000)}[a${i + 1}]`
-      );
-    });
+    const originalVol = originalMuted ? 0 : 1;
+    if (!music) {
+      return `[0:a]volume=${originalVol.toFixed(2)}[aout]`;
+    }
 
-    // Mix all
-    const inputLabels = tracks.map((_, i) => `[a${i}]`).concat(tracks.map((_, i) => `[a${i + 1}]`));
-    const allLabels = Array.from({ length: tracks.length + 1 }, (_, i) => `[a${i}]`).join('');
-    parts.push(`${allLabels}amix=inputs=${tracks.length + 1}:duration=first[aout]`);
-
+    const delayMs = Math.max(0, Math.round(music.startTime * 1000));
+    const parts = [
+      `[0:a]volume=${originalVol.toFixed(2)}[a0]`,
+      `[${musicInputIndex}:a]volume=${musicVol.toFixed(2)},adelay=${delayMs}|${delayMs}[a1]`,
+      `[a0][a1]amix=inputs=2:duration=first[aout]`,
+    ];
     return parts.join(';');
   }
 
-  // --- Filter (LUT) ---
-
-  static lutFilter(lutFilePath: string): string {
-    return `lut3d="${lutFilePath}"`;
-  }
+  // --- Filter (colorchannelmixer — fast SIMD path) ---
 
   /**
-   * Apply the same 4×5 color matrix as Skia preview (`filters/presets.ts`) using geq.
-   * Inputs are treated as 8-bit RGB; alpha column uses implicit 1.0 when m3 ≠ 0.
+   * Apply the 4×5 color matrix via colorchannelmixer + lut.
+   *
+   * colorchannelmixer is SIMD-vectorized and 10–20× faster than geq for
+   * linear color transforms.  It handles the 4×4 mixing portion (columns 0-3
+   * of each row).  Per-channel brightness offsets (column 4) are applied
+   * afterwards with a lut filter when non-negligible (|offset| > 0.004).
+   *
+   * Matrix layout (same as filters/presets.ts FilterDefinition.colorMatrix):
+   *   row 0: [rr, rg, rb, ra, r_offset]   (red output)
+   *   row 1: [gr, gg, gb, ga, g_offset]   (green output)
+   *   row 2: [br, bg, bb, ba, b_offset]   (blue output)
+   *   row 3: alpha row — ignored (video has no transparency)
    */
-  private static formatGeqFloat(n: number): string {
-    if (!Number.isFinite(n)) return '0';
-    if (n === 0) return '0';
-    let s = n.toFixed(6);
-    s = s.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
-    return s || '0';
-  }
+  static colorMatrixToFastFilter(matrix: number[]): string {
+    const f = (n: number) => {
+      if (!Number.isFinite(n)) return '0';
+      let s = n.toFixed(6).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+      return s || '0';
+    };
 
-  private static geqChannelFromMatrixRow(matrix: number[], row: 0 | 1 | 2): string {
-    const b = row * 5;
-    const m0 = matrix[b];
-    const m1 = matrix[b + 1];
-    const m2 = matrix[b + 2];
-    const m3 = matrix[b + 3];
-    const m4 = matrix[b + 4];
+    // Row 0: red output
+    const rr = matrix[0], rg = matrix[1], rb = matrix[2];
+    // Row 1: green output
+    const gr = matrix[5], gg = matrix[6], gb = matrix[7];
+    // Row 2: blue output
+    const br = matrix[10], bg = matrix[11], bb = matrix[12];
+    // Offsets (column 4 of each row, values in 0-1 range)
+    const rOff = matrix[4] ?? 0;
+    const gOff = matrix[9] ?? 0;
+    const bOff = matrix[14] ?? 0;
 
-    const terms: string[] = [
-      `${this.formatGeqFloat(m0)}*r(X,Y)/255`,
-      `${this.formatGeqFloat(m1)}*g(X,Y)/255`,
-      `${this.formatGeqFloat(m2)}*b(X,Y)/255`,
-    ];
-    if (m3 !== 0) {
-      terms.push(this.formatGeqFloat(m3));
+    let filter = `colorchannelmixer=${[
+      `rr=${f(rr)}`, `rg=${f(rg)}`, `rb=${f(rb)}`,
+      `gr=${f(gr)}`, `gg=${f(gg)}`, `gb=${f(gb)}`,
+      `br=${f(br)}`, `bg=${f(bg)}`, `bb=${f(bb)}`,
+    ].join(':')}`;
+
+    // Apply brightness offsets via lut (integer pixel arithmetic, very fast).
+    // Commas inside the single-quoted expression are safe with the filter parser.
+    if (Math.abs(rOff) > 0.004 || Math.abs(gOff) > 0.004 || Math.abs(bOff) > 0.004) {
+      const ro = Math.round(rOff * 255);
+      const go = Math.round(gOff * 255);
+      const bo = Math.round(bOff * 255);
+      filter += `,lut=r='clip(val+${ro},0,255)':g='clip(val+${go},0,255)':b='clip(val+${bo},0,255)'`;
     }
-    if (m4 !== 0) {
-      terms.push(this.formatGeqFloat(m4));
-    }
-    const sum = terms.join('+');
-    return `min(255,max(0,255*(${sum})))`;
-  }
 
-  private static colorMatrixToGeqFilter(matrix: number[]): string {
-    const r = this.geqChannelFromMatrixRow(matrix, 0);
-    const g = this.geqChannelFromMatrixRow(matrix, 1);
-    const b = this.geqChannelFromMatrixRow(matrix, 2);
-    // RGB geq only (no alpha plane) — some mobile FFmpeg builds reject a='255' on rgb24.
-    return `format=rgb24,geq=r='${r}':g='${g}':b='${b}',format=yuv420p`;
-  }
-
-  // --- Effects ---
-
-  static effect(
-    effect: Effect,
-    fps: number = 30,
-    /** Output canvas for zoompan (post-rotation/crop dims, even numbers). */
-    outWidth: number = 1280,
-    outHeight: number = 720,
-    /** Segment start in source time — enable window is segment-local after `-ss`. */
-    timeOffset: number = 0,
-    /** Segment speed — setpts precedes effects in the chain, so windows scale. */
-    speed: number = 1
-  ): string {
-    const safeSpeed = speed > 0 ? speed : 1;
-    const start = Math.max(0, (effect.startTime - timeOffset) / safeSpeed);
-    const end = Math.max(start, (effect.startTime + effect.duration - timeOffset) / safeSpeed);
-    const dur = Math.max(0.001, end - start);
-    const S = start.toFixed(3);
-    const E = end.toFixed(3);
-    const D = dur.toFixed(3);
-    const enable = `enable='between(t,${S},${E})'`;
-    // zoompan needs an explicit even output size; hd1080 distorted other resolutions.
-    const w = Math.max(2, outWidth - (outWidth % 2));
-    const h = Math.max(2, outHeight - (outHeight % 2));
-
-    switch (effect.type) {
-      // zoompan does not support timeline enable — gate via `it` (input time) in
-      // the z expression instead, ramping zoom over the effect window.
-      case 'zoom_in':
-        return `zoompan=z='if(between(it,${S},${E}),min(1+0.5*(it-${S})/${D},1.5),1)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${w}x${h}`;
-
-      case 'zoom_out':
-        return `zoompan=z='if(between(it,${S},${E}),max(1.5-0.5*(it-${S})/${D},1),1)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=${w}x${h}`;
-
-      case 'glitch':
-        return `rgbashift=rh=-5:gh=3:bh=7:${enable},noise=alls=20:allf=t:${enable}`;
-
-      case 'vhs':
-        return `noise=alls=30:allf=t:${enable},eq=contrast=1.1:brightness=0.05:${enable},rgbashift=rh=3:bv=-2:${enable}`;
-
-      case 'soul':
-        return `split[a][b];[b]fade=t=in:st=${S}:d=0.5,setpts=PTS+0.1/TB[b];[a][b]overlay=format=auto:${enable}`;
-
-      // Constant-dimension shake: crop a fixed 20px-smaller canvas for the whole
-      // clip (jitter x/y only inside the window), then scale back to input size.
-      // Keeps frame dims stable so concat -c copy works across segments.
-      case 'shake':
-        return `crop=iw-20:ih-20:'10+if(between(t,${S},${E}),-5+10*random(0),0)':'10+if(between(t,${S},${E}),-5+10*random(1),0)',scale=iw+20:ih+20`;
-
-      case 'flash':
-        return `eq=brightness='0.3*sin(2*PI*(t-${S})*4)':${enable}`;
-    }
+    return filter;
   }
 
   // --- Quality Presets ---
 
-  static qualityArgs(quality: ExportQuality): string {
+  /**
+   * Codec + quality flags for the output.
+   * `videoEncoder` should come from FFmpegEngine.detectH264Encoder() — the
+   * LGPL ffmpeg-kit flavors have no libx264, so hardware encoders
+   * (VideoToolbox/MediaCodec) carry H.264, with mpeg4 as the last resort.
+   */
+  static qualityArgs(quality: ExportQuality, videoEncoder?: string): string {
+    const codec =
+      videoEncoder ??
+      (Platform.OS === 'ios' ? 'h264_videotoolbox' : 'h264_mediacodec');
+
+    // -g (gop size) is required for h264_mediacodec to set a sane i-frame
+    // interval (it warns and can stall with the default of 1) and is harmless
+    // on the other encoders.
     switch (quality) {
       case 'low':
-        return '-c:v h264 -b:v 2000k -c:a aac -b:a 128k -r 24 -pix_fmt yuv420p';
+        return `-c:v ${codec} -b:v 2000k -g 48 -c:a aac -b:a 128k -r 24`;
       case 'medium':
-        return '-c:v h264 -b:v 5000k -c:a aac -b:a 192k -r 30 -pix_fmt yuv420p';
+        return `-c:v ${codec} -b:v 5000k -g 60 -c:a aac -b:a 192k -r 30`;
       case 'high':
-        return '-c:v h264 -b:v 10000k -c:a aac -b:a 256k -r 30 -pix_fmt yuv420p';
+        return `-c:v ${codec} -b:v 8000k -g 60 -c:a aac -b:a 256k -r 30`;
     }
   }
 
-  // --- Concat ---
+  // --- Single-pass export command ---
 
-  static concatFile(segmentPaths: string[]): string {
-    return segmentPaths.map((p) => `file '${p}'`).join('\n');
-  }
-
-  static concat(concatFilePath: string, outputPath: string): string {
-    return `-f concat -safe 0 -i "${concatFilePath}" -c copy "${outputPath}"`;
-  }
-
-  // --- Build Complex Filter Graph ---
-
-  static buildFilterGraph(options: {
-    segment: VideoSegment;
-    crop?: CropRegion | null;
-    filter?: FilterPreset;
-    filterIntensity?: number;
-    effects?: Effect[];
-    textOverlays?: TextOverlay[];
+  /**
+   * Build the complete export command: video base chain (filter + text),
+   * sticker overlays, audio graph, quality args, output.
+   */
+  static buildExportCommand(options: {
+    sourceUri: string;
+    /** Defaults to 'video'; a still image loops into a fixed-length clip. */
+    sourceType?: SourceType;
+    outputPath: string;
+    filter: FilterPreset;
+    stickerOverlays: StickerOverlay[];
+    /** Text overlays pre-rendered to PNGs (Skia snapshot) — composited last, above stickers. */
+    rasterizedTexts?: StickerOverlay[];
+    musicTrack: AudioTrack | null;
+    originalMuted: boolean;
+    /** False for a video with no audio track — skips the `[0:a]`-referencing
+     * branch of the audio filter graph, which otherwise fails with
+     * "Stream specifier '0:a' ... matches no streams". Always effectively
+     * true for an image source (isImage already takes its own branch). */
+    sourceHasAudio?: boolean;
     videoWidth: number;
     videoHeight: number;
     previewWidth?: number;
-    fps?: number;
-    /** Segment start in source time, used to localize text/effect enable windows. */
-    timeOffset?: number;
+    quality: ExportQuality;
+    /** From FFmpegEngine.detectH264Encoder(); platform default when omitted. */
+    videoEncoder?: string;
+    /** From FFmpegEngine.detectHwaccelDecoder(); null/omitted skips
+     * hardware-accelerated decode of the SOURCE (separate from videoEncoder,
+     * which only affects the output encode side). Speeds up decoding heavy
+     * sources (4K/HDR/high-fps); has no effect on output resolution/quality. */
+    hwaccelDecoder?: string | null;
   }): string {
-    const filters: string[] = [];
-    const { segment, crop, filter, filterIntensity = 1, effects, textOverlays, videoWidth, videoHeight, previewWidth, fps = 30, timeOffset = 0 } = options;
+    const {
+      sourceUri,
+      sourceType = 'video',
+      outputPath,
+      filter,
+      stickerOverlays,
+      rasterizedTexts = [],
+      musicTrack,
+      originalMuted,
+      sourceHasAudio = true,
+      previewWidth,
+      quality,
+      videoEncoder,
+      hwaccelDecoder,
+    } = options;
+    const isImage = sourceType === 'image';
 
-    // Speed
-    if (segment.speed !== 1) {
-      filters.push(`setpts=${(1 / segment.speed).toFixed(4)}*PTS`);
-    }
+    // Output is always a 9:16 story canvas (IG model): the video is contain-fit
+    // and centered on it, and overlays can sit ANYWHERE on the canvas —
+    // including over the letterbox bars. Overlay positions are normalized
+    // against this canvas, matching the preview's 9:16 editing surface.
+    const canvasW = 1080;
+    const canvasH = 1920;
 
-    // Rotation
-    const rotFilter = this.rotate(segment.rotation);
-    if (rotFilter) filters.push(rotFilter);
+    // --- Base video chain: fit-to-canvas + color matrix + center-pad ---
+    const baseFilters: string[] = [];
 
-    // Crop
-    if (crop) filters.push(this.crop(crop));
+    // Contain-fit into the canvas first (reduces pixel count before filtering).
+    baseFilters.push(
+      `scale=${canvasW}:${canvasH}:force_original_aspect_ratio=decrease:force_divisible_by=2`
+    );
 
-    // Color matrix (same source as Skia preview) + intensity via applyIntensity
-    if (filter && filter !== 'normal' && filterIntensity > 0) {
+    // Color filter BEFORE pad so the letterbox bars stay pure black (a warm
+    // preset would otherwise tint them via its brightness offsets).
+    if (filter !== 'normal') {
       const def = getFilterByPreset(filter);
-      const matrix = applyIntensity(def.colorMatrix, filterIntensity);
-      filters.push(this.colorMatrixToGeqFilter(matrix));
+      baseFilters.push(this.colorMatrixToFastFilter(def.colorMatrix));
     }
 
-    // Effects — canvas dims after rotation/crop (zoompan needs explicit size)
-    if (effects) {
-      const rotated = segment.rotation === 90 || segment.rotation === 270;
-      const effW = crop ? Math.round(crop.width) : rotated ? videoHeight : videoWidth;
-      const effH = crop ? Math.round(crop.height) : rotated ? videoWidth : videoHeight;
-      for (const effect of effects) {
-        const effFilter = this.effect(effect, fps, effW, effH, timeOffset, segment.speed);
-        if (effFilter) filters.push(effFilter);
+    // Center on the 9:16 canvas; setsar normalizes anamorphic sources.
+    baseFilters.push(`pad=${canvasW}:${canvasH}:(ow-iw)/2:(oh-ih)/2:color=black`);
+    baseFilters.push('setsar=1');
+
+    // --- Inputs: [0]=video, [1..n]=stickers then rasterized text, [n+1]=music ---
+    // Text PNGs come after stickers so text always composites on top,
+    // matching the preview z-order.
+    const allOverlays = [...stickerOverlays, ...rasterizedTexts];
+    // A still image has no natural duration or framerate — loop it into an
+    // infinite virtual video stream (-loop/-r are input options and sit
+    // BEFORE this -i). The duration bound is applied on the OUTPUT side (see
+    // the tail of the command below), NOT here: FFmpeg input options must
+    // precede their -i, so a `-t` placed after this -i would silently bind
+    // to the NEXT input instead. That exact mistake previously put the
+    // duration cap on the music input when one was present — leaving the
+    // looped image stream unbounded, so FFmpeg encoded an endless video and
+    // the export hung at 100% forever (image-only exports "worked" only
+    // because with no later input the stray -t happened to land on the
+    // output). -hwaccel (decode-side acceleration) only applies to an actual
+    // video decode, not the synthetic looped-image stream, so it's skipped
+    // for isImage.
+    const hwaccelFlag = !isImage && hwaccelDecoder ? `-hwaccel ${hwaccelDecoder} ` : '';
+    let command = isImage
+      ? `-loop 1 -r 30 -i ${this.quotePath(sourceUri)}`
+      : `${hwaccelFlag}-i ${this.quotePath(sourceUri)}`;
+    const stickerParts: { scale: string; overlay: string }[] = [];
+    allOverlays.forEach((s, i) => {
+      // Overlays composite after pad — coordinates are canvas-relative.
+      const part = this.overlayImage(s, i + 1, canvasW, canvasH, previewWidth);
+      command += ` ${part.inputs}`;
+      stickerParts.push({ scale: part.scale, overlay: part.overlay });
+    });
+    const musicInputIndex = 1 + allOverlays.length;
+    if (musicTrack) {
+      // Images have no natural duration to bound the mix against (unlike
+      // video, where music just plays once and can end early) — loop the
+      // track so it fills the whole fixed image duration.
+      const musicLoop = isImage ? '-stream_loop -1 ' : '';
+      // -ss before -i is an input seek — starts decoding from the picked
+      // trim point (the IG-style "which N seconds of this song" window from
+      // MusicSheet) instead of the file's beginning. Combined with
+      // -stream_loop above, each loop iteration replays from this same
+      // point, not from 0.
+      const trimSeek =
+        musicTrack.trimStart > 0.001 ? `-ss ${musicTrack.trimStart.toFixed(3)} ` : '';
+      // No input-side duration cap here: -t as an input option is unreliable
+      // when combined with -stream_loop -1 (loop timestamp resets can defeat
+      // it), and the image case is bounded authoritatively by the OUTPUT -t
+      // at the tail of the command instead.
+      command += ` ${trimSeek}${musicLoop}-i ${this.quotePath(musicTrack.uri)}`;
+    }
+
+    // --- filter_complex graph ---
+    // The video chain always ends with [vout] so -map has a consistent label.
+    // If nothing needs filter_complex on video (no filter/text/stickers) and
+    // no audio processing either, skip filter_complex entirely.
+    const graph: string[] = [];
+    let videoLabel = '[0:v]';
+
+    if (baseFilters.length > 0) {
+      // Determine the output label for the base chain:
+      // If stickers follow, intermediate label is [base]; otherwise final is [vout].
+      const baseOutLabel = stickerParts.length > 0 ? '[base]' : '[vout]';
+      graph.push(`[0:v]${baseFilters.join(',')}${baseOutLabel}`);
+      videoLabel = baseOutLabel;
+    }
+
+    stickerParts.forEach((p, i) => {
+      // Scale filter uses the label already set by overlayImage (s${inputIndex}).
+      graph.push(p.scale);
+      const inLabel = videoLabel; // previous stage output
+      const stickerLabel = `[s${i + 1}]`;
+      const outLabel = i === stickerParts.length - 1 ? '[vout]' : `[v${i}]`;
+      graph.push(`${inLabel}${stickerLabel}${p.overlay}${outLabel}`);
+      videoLabel = outLabel;
+    });
+
+    const audioGraph = this.audioGraph(
+      musicTrack,
+      originalMuted,
+      musicInputIndex,
+      !isImage && sourceHasAudio
+    );
+    if (audioGraph) graph.push(audioGraph);
+
+    if (graph.length > 0) {
+      command += ` -filter_complex "${graph.join(';')}"`;
+      // If the video chain went through filter_complex, map [vout]; else map stream 0:v directly.
+      if (videoLabel !== '[0:v]') {
+        command += ` -map "[vout]"`;
+      } else {
+        command += ' -map 0:v';
       }
+      command += audioGraph ? ' -map "[aout]"' : ' -map 0:a?';
     }
 
-    // Text overlays
-    if (textOverlays) {
-      for (const text of textOverlays) {
-        filters.push(this.drawText(text, videoWidth, videoHeight, previewWidth, timeOffset, segment.speed));
-      }
+    // When filter_complex is active, ffmpeg-kit auto-rotates decoded frames (respects
+    // the source 'rotate' metadata tag) before sending them into the graph.  After
+    // the graph the frames are already correctly oriented, but some builds still copy
+    // the original rotate tag to the output, causing the player to rotate them a
+    // second time.  Zero out the tag so the player sees pre-rotated frames with no
+    // extra rotation instruction.
+    if (graph.length > 0) {
+      command += ' -map_metadata 0 -metadata:s:v:0 rotate=0';
     }
 
-    return filters.join(',');
+    // Image sources are an INFINITELY looped input stream (-loop 1, see the
+    // input section above) — this output-side -t is the one and only thing
+    // bounding the encode. It must be an OUTPUT option (i.e. after all -i's)
+    // so it caps the muxed result deterministically no matter how many
+    // looping inputs (image, -stream_loop'd music/GIFs) are present;
+    // -shortest alone cannot end an encode where EVERY stream loops forever.
+    const outputDuration = isImage ? ` -t ${IMAGE_SOURCE_DURATION_SECONDS}` : '';
+    // -shortest bounds looped GIF/music inputs to the video's natural end —
+    // needed ONLY for the video case. For the image case it's redundant
+    // (the -t above is the bound) and actively harmful: ffmpeg-kit ships
+    // ffmpeg 6.0, where -shortest runs through the muxer's sync-queue and
+    // can force-finish the FASTER stream when the slow async videotoolbox
+    // video encode lags behind audio — confirmed empirically (image+music
+    // export produced a 15s video with the audio track truncated at ~6.6s;
+    // same command without -shortest yields full 15s/15s, verified on both
+    // a full-length and a short -stream_loop'd mp3).
+    const shortestFlag = isImage ? '' : ' -shortest';
+    command += `${outputDuration} ${this.qualityArgs(quality, videoEncoder)}${shortestFlag} -y ${this.quotePath(outputPath)}`;
+    return command;
   }
 }

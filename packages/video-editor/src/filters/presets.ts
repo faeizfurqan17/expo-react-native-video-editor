@@ -150,19 +150,6 @@ export const FILTER_PRESETS: FilterDefinition[] = [
 ];
 
 /**
- * Interpolate between identity matrix and filter matrix based on intensity.
- */
-export function applyIntensity(
-  filterMatrix: number[],
-  intensity: number
-): number[] {
-  return filterMatrix.map((val, i) => {
-    const identityVal = IDENTITY_MATRIX[i];
-    return identityVal + (val - identityVal) * intensity;
-  });
-}
-
-/**
  * Get filter definition by preset name.
  */
 export function getFilterByPreset(preset: FilterPreset): FilterDefinition {

@@ -1,11 +1,16 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
+    // expo/tsconfig.base (extended transitively via ../../tsconfig.json) sets
+    // noEmit: true for app-style typechecking — this package is a library
+    // that must actually emit dist/, so override it back off here.
+    "noEmit": false,
     "outDir": "./dist",
     "rootDir": "./src",
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    "moduleSuffixes": [".ios", ".android", ".native", ""]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

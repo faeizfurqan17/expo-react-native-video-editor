@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, Pressable, ScrollView, useWindowDimensions, Alert } from 'react-native';
+import { View, Text, Pressable, ScrollView, useWindowDimensions, Alert, ActivityIndicator, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,6 +8,19 @@ export default function HomeScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+
+  // Setting isImporting/selectedVideo and navigating in the same tick can get
+  // batched into a single React commit, so the "Importing video..." overlay
+  // never actually paints before the screen transitions away. One frame is
+  // enough for it to render — no need for the arbitrary 500ms/1000ms delays
+  // this previously used, which just taxed every import unconditionally.
+  const navigateToEditor = (uri: string, sourceType: 'video' | 'image' = 'video') => {
+    requestAnimationFrame(() => {
+      router.push({ pathname: '/editor', params: { videoUri: uri, sourceType } });
+      setIsImporting(false);
+    });
+  };
 
   const pickVideo = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -16,18 +29,45 @@ export default function HomeScreen() {
       return;
     }
 
+    const pickStart = Date.now();
+    console.log('[import] pickVideo: launchImageLibraryAsync starting');
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['videos'],
-      quality: 1,
+      allowsEditing: false, // ensures we don't trigger OS edit/crop UI
       videoMaxDuration: 300, // 5 min max
+      // videoExportPreset/preferredAssetRepresentationMode are iOS-only
+      // (PHPickerConfiguration/UIImagePickerController concepts) — Android's
+      // picker has no such native option and expo-image-picker just ignores
+      // them there, but keep them iOS-gated so it's clear this fix is scoped
+      // to the platform that actually had the slow-import problem.
+      ...(Platform.OS === 'ios' && {
+        videoExportPreset: ImagePicker.VideoExportPreset.Passthrough, // stops OS transcode after the asset is obtained
+        // Without this, PHPickerViewController defaults to .automatic, which can
+        // let the system choose (and prepare/convert) a representation before
+        // handing the file over at all — independent of videoExportPreset,
+        // which only governs what happens AFTER that. .current requests the
+        // asset's exact on-disk bytes with no system-side conversion, which is
+        // what actually fixed a 14s copy-out delay for a 54MB/54s 1080p clip.
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
+      }),
     });
+    console.log(`[import] pickVideo: launchImageLibraryAsync took ${Date.now() - pickStart}ms`);
 
     if (!result.canceled && result.assets[0]) {
-      setSelectedVideo(result.assets[0].uri);
-      router.push({
-        pathname: '/editor',
-        params: { videoUri: result.assets[0].uri },
-      });
+      const asset = result.assets[0];
+      console.log(
+        '[import] picked asset:',
+        JSON.stringify({
+          fileName: asset.fileName,
+          mimeType: asset.mimeType,
+          width: asset.width,
+          height: asset.height,
+          duration: asset.duration,
+        })
+      );
+      setIsImporting(true);
+      setSelectedVideo(asset.uri);
+      navigateToEditor(asset.uri);
     }
   };
 
@@ -38,18 +78,48 @@ export default function HomeScreen() {
       return;
     }
 
+    const recordStart = Date.now();
+    console.log('[import] recordVideo: launchCameraAsync starting');
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ['videos'],
       quality: 1,
       videoMaxDuration: 60,
+      // iOS-only — see pickVideo's comment. Without this, iOS may run its
+      // own export/transcode pass on the freshly captured clip before
+      // handing it back; Android has no equivalent option to gate here.
+      ...(Platform.OS === 'ios' && {
+        videoExportPreset: ImagePicker.VideoExportPreset.Passthrough,
+      }),
+    });
+    console.log(`[import] recordVideo: launchCameraAsync took ${Date.now() - recordStart}ms`);
+
+    if (!result.canceled && result.assets[0]) {
+      setIsImporting(true);
+      setSelectedVideo(result.assets[0].uri);
+      navigateToEditor(result.assets[0].uri);
+    }
+  };
+
+  const pickPhoto = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission required', 'Please allow access to your photo library.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      // iOS-only — see pickVideo's comment for why.
+      ...(Platform.OS === 'ios' && {
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Current,
+      }),
     });
 
     if (!result.canceled && result.assets[0]) {
+      setIsImporting(true);
       setSelectedVideo(result.assets[0].uri);
-      router.push({
-        pathname: '/editor',
-        params: { videoUri: result.assets[0].uri },
-      });
+      navigateToEditor(result.assets[0].uri, 'image');
     }
   };
 
@@ -98,26 +168,41 @@ export default function HomeScreen() {
             Record Video
           </Text>
         </Pressable>
+
+        <Pressable
+          onPress={pickPhoto}
+          style={{
+            paddingVertical: 16,
+            borderRadius: 14,
+            backgroundColor: '#333',
+            alignItems: 'center',
+            borderCurve: 'continuous',
+          }}
+        >
+          <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '600' }}>
+            Pick a Photo
+          </Text>
+        </Pressable>
       </View>
 
-      {/* Features list */}
-      <View style={{ gap: 8, width: '100%', maxWidth: 320 }}>
-        <Text style={{ color: '#666', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 }}>
-          Features
-        </Text>
-        {[
-          'Split, Speed, Volume, Crop, Rotate, Delete',
-          'Add Audio & Voiceover',
-          'Text with Font, Color, Alignment, Highlight',
-          'Filters: Norway, Neon, Retro, B&W & more',
-          'Effects: Zoom, Glitch, VHS, Soul, Flash',
-          'Sticker Overlays with Drag & Resize',
-        ].map((feature, i) => (
-          <Text key={i} style={{ color: '#999', fontSize: 13 }}>
-            {feature}
+      {isImporting && (
+        <View
+          style={{
+            position: 'absolute',
+            top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 16,
+            zIndex: 100,
+          }}
+        >
+          <ActivityIndicator size="large" color="#FFF" />
+          <Text style={{ color: '#FFF', fontSize: 16, fontWeight: '600' }}>
+            Importing video...
           </Text>
-        ))}
-      </View>
+        </View>
+      )}
     </ScrollView>
   );
 }

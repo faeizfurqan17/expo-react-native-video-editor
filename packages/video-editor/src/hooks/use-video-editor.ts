@@ -1,72 +1,47 @@
 import { useRef, useCallback, useMemo } from 'react';
 import { useStore } from 'zustand';
-import { createEditorStore, type EditorStore } from '../store/editor-store';
+import { createEditorStore } from '../store/editor-store';
 import { ExportPipeline } from '../core/export-pipeline';
 import type {
   TextOverlay,
   StickerOverlay,
   AudioTrack,
   FilterPreset,
-  Effect,
-  CropRegion,
+  EditorSheet,
   ExportConfig,
   ExportResult,
+  SourceType,
 } from '../core/types';
 
-export interface UseVideoEditorOptions {
-  source?: string;
-}
-
-export function useVideoEditor(options?: UseVideoEditorOptions) {
+export function useVideoEditor() {
   const storeRef = useRef(createEditorStore());
   const store = storeRef.current;
 
   const state = useStore(store);
   const pipelineRef = useRef<ExportPipeline | null>(null);
 
-  // --- Initialization ---
-
   const initialize = useCallback(
-    (uri: string, duration: number, width: number, height: number) => {
-      store.getState().initialize(uri, duration, width, height);
+    (
+      uri: string,
+      duration: number,
+      width: number,
+      height: number,
+      sourceType?: SourceType,
+      hasAudio?: boolean
+    ) => {
+      store.getState().initialize(uri, duration, width, height, sourceType, hasAudio);
     },
     [store]
   );
 
-  // --- Segment Actions ---
+  // --- Filter ---
 
-  const split = useCallback(
-    (atTime: number) => store.getState().split(atTime),
+  const setFilter = useCallback(
+    (preset: FilterPreset) => store.getState().setFilter(preset),
     [store]
   );
 
-  const deleteSegment = useCallback(
-    (segmentId: string) => store.getState().deleteSegment(segmentId),
-    [store]
-  );
-
-  const setSpeed = useCallback(
-    (segmentId: string, speed: number) =>
-      store.getState().setSegmentSpeed(segmentId, speed),
-    [store]
-  );
-
-  const setVolume = useCallback(
-    (volume: number) => store.getState().setOriginalVolume(volume),
-    [store]
-  );
-
-  const setCrop = useCallback(
-    (crop: CropRegion | null) => store.getState().setCrop(crop),
-    [store]
-  );
-
-  const rotate = useCallback(
-    () => store.getState().rotateVideo(),
-    [store]
-  );
-
-  // --- Text Overlays ---
+  // --- Text ---
 
   const addText = useCallback(
     (overlay: Omit<TextOverlay, 'id'>) => store.getState().addText(overlay),
@@ -74,8 +49,7 @@ export function useVideoEditor(options?: UseVideoEditorOptions) {
   );
 
   const updateText = useCallback(
-    (id: string, updates: Partial<TextOverlay>) =>
-      store.getState().updateText(id, updates),
+    (id: string, updates: Partial<TextOverlay>) => store.getState().updateText(id, updates),
     [store]
   );
 
@@ -84,11 +58,10 @@ export function useVideoEditor(options?: UseVideoEditorOptions) {
     [store]
   );
 
-  // --- Sticker Overlays ---
+  // --- Stickers ---
 
   const addSticker = useCallback(
-    (overlay: Omit<StickerOverlay, 'id'>) =>
-      store.getState().addSticker(overlay),
+    (overlay: Omit<StickerOverlay, 'id'>) => store.getState().addSticker(overlay),
     [store]
   );
 
@@ -103,56 +76,33 @@ export function useVideoEditor(options?: UseVideoEditorOptions) {
     [store]
   );
 
-  // --- Audio ---
+  // --- Music ---
 
-  const addAudio = useCallback(
-    (track: Omit<AudioTrack, 'id'>) => store.getState().addAudio(track),
+  const setMusic = useCallback(
+    (track: Omit<AudioTrack, 'id' | 'type' | 'muted'>) => store.getState().setMusic(track),
     [store]
   );
 
-  const removeAudio = useCallback(
-    (id: string) => store.getState().removeAudio(id),
+  const updateMusic = useCallback(
+    (updates: Partial<AudioTrack>) => store.getState().updateMusic(updates),
     [store]
   );
 
-  // --- Filters ---
+  const removeMusic = useCallback(() => store.getState().removeMusic(), [store]);
 
-  const setFilter = useCallback(
-    (preset: FilterPreset) => store.getState().setFilter(preset),
+  const toggleMute = useCallback(() => store.getState().toggleMute(), [store]);
+
+  // --- UI ---
+
+  const setSelectedOverlay = useCallback(
+    (id: string | null) => store.getState().setSelectedOverlay(id),
     [store]
   );
 
-  const setFilterIntensity = useCallback(
-    (intensity: number) => store.getState().setFilterIntensity(intensity),
+  const setActiveSheet = useCallback(
+    (sheet: EditorSheet) => store.getState().setActiveSheet(sheet),
     [store]
   );
-
-  const clearFilter = useCallback(
-    () => store.getState().clearFilter(),
-    [store]
-  );
-
-  const applyFilterToAllSegments = useCallback(
-    () => store.getState().applyFilterToAllSegments(),
-    [store]
-  );
-
-  // --- Effects ---
-
-  const addEffect = useCallback(
-    (effect: Omit<Effect, 'id'>) => store.getState().addEffect(effect),
-    [store]
-  );
-
-  const removeEffect = useCallback(
-    (id: string) => store.getState().removeEffect(id),
-    [store]
-  );
-
-  // --- Undo/Redo ---
-
-  const undo = useCallback(() => store.getState().undo(), [store]);
-  const redo = useCallback(() => store.getState().redo(), [store]);
 
   // --- Export ---
 
@@ -171,8 +121,7 @@ export function useVideoEditor(options?: UseVideoEditorOptions) {
       pipelineRef.current = pipeline;
 
       try {
-        const result = await pipeline.export();
-        return result;
+        return await pipeline.export();
       } finally {
         currentState.setExporting(false);
         pipelineRef.current = null;
@@ -190,34 +139,22 @@ export function useVideoEditor(options?: UseVideoEditorOptions) {
 
   return useMemo(
     () => ({
-      // State
       ...state,
       store,
-
-      // Actions
       initialize,
-      split,
-      deleteSegment,
-      setSpeed,
-      setVolume,
-      setCrop,
-      rotate,
+      setFilter,
       addText,
       updateText,
       removeText,
       addSticker,
       updateSticker,
       removeSticker,
-      addAudio,
-      removeAudio,
-      setFilter,
-      setFilterIntensity,
-      applyFilterToAllSegments,
-      clearFilter,
-      addEffect,
-      removeEffect,
-      undo,
-      redo,
+      setMusic,
+      updateMusic,
+      removeMusic,
+      toggleMute,
+      setSelectedOverlay,
+      setActiveSheet,
       exportVideo,
       cancelExport,
     }),
@@ -225,28 +162,19 @@ export function useVideoEditor(options?: UseVideoEditorOptions) {
       state,
       store,
       initialize,
-      split,
-      deleteSegment,
-      setSpeed,
-      setVolume,
-      setCrop,
-      rotate,
+      setFilter,
       addText,
       updateText,
       removeText,
       addSticker,
       updateSticker,
       removeSticker,
-      addAudio,
-      removeAudio,
-      setFilter,
-      setFilterIntensity,
-      applyFilterToAllSegments,
-      clearFilter,
-      addEffect,
-      removeEffect,
-      undo,
-      redo,
+      setMusic,
+      updateMusic,
+      removeMusic,
+      toggleMute,
+      setSelectedOverlay,
+      setActiveSheet,
       exportVideo,
       cancelExport,
     ]

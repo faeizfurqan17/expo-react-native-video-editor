@@ -11,3 +11,7 @@ example/android/
 
 # Build
 packages/video-editor/dist/
+
+# Local tooling / secrets
+.claude/
+example/.env

@@ -1,14 +1,32 @@
 {
-  "name": "@anthropic/react-native-video-editor",
+  "name": "@faeizfurqan/expo-story-video-and-image-editor",
   "version": "0.1.0",
   "description": "Open-source React Native video editor with trim, crop, filters, effects, text, stickers, and audio",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "ios",
+    "patches",
+    "plugin",
+    "GradedVideoPlayer.podspec",
+    "expo-module.config.json"
+  ],
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "tsc",
+    "prepublishOnly": "yarn build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/faeizfurqan/expo-react-native-video-editor.git"
+  },
+  "homepage": "https://github.com/faeizfurqan/expo-react-native-video-editor#readme",
+  "bugs": {
+    "url": "https://github.com/faeizfurqan/expo-react-native-video-editor/issues"
+  },
+  "author": "faeizfurqan",
   "keywords": [
     "react-native",
     "video-editor",
@@ -22,21 +40,29 @@
   ],
   "license": "MIT",
   "peerDependencies": {
+    "@azzapp/react-native-skia-video": "0.9.0",
+    "@expo/vector-icons": ">=14.0.0",
+    "@react-native-community/slider": ">=4.0.0",
+    "@shopify/react-native-skia": ">=1.0.0",
+    "expo-audio": ">=0.3.0",
+    "expo-document-picker": ">=13.0.0",
+    "expo-file-system": ">=17.0.0",
+    "expo-image": ">=1.10.0",
+    "expo-image-picker": ">=16.0.0",
+    "expo-modules-core": ">=1.12.0",
+    "expo-video": ">=2.0.0",
     "react": ">=18",
     "react-native": ">=0.73",
-    "@expo/vector-icons": ">=14.0.0",
-    "@shopify/react-native-skia": ">=1.0.0",
-    "react-native-reanimated": ">=3.0.0",
     "react-native-gesture-handler": ">=2.0.0",
-    "expo-video": ">=2.0.0",
-    "expo-audio": ">=0.3.0",
-    "expo-file-system": ">=17.0.0"
+    "react-native-reanimated": ">=3.0.0"
   },
   "dependencies": {
     "zustand": "^4.5.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.0",
-    "typescript": "^5.3.0"
+    "eslint": "^10.6.0",
+    "typescript": "^5.3.0",
+    "typescript-eslint": "^8.62.1"
   }
 }

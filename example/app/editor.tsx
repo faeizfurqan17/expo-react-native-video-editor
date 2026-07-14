@@ -1,12 +1,20 @@
 import React from 'react';
 import { View, Text } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { VideoEditor, type ExportResult } from '@anthropic/react-native-video-editor';
+import { useIsFocused } from '@react-navigation/native';
+import { VideoEditor, type ExportResult, type SourceType } from '@faeizfurqan/expo-story-video-and-image-editor';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function EditorScreen() {
   const router = useRouter();
-  const { videoUri } = useLocalSearchParams<{ videoUri: string }>();
+  const { videoUri, sourceType } = useLocalSearchParams<{
+    videoUri: string;
+    sourceType?: SourceType;
+  }>();
+  // expo-router's native stack keeps this screen mounted in the background
+  // after pushing /preview on export complete — without this, the editor's
+  // live video decoder keeps running off-screen indefinitely.
+  const isFocused = useIsFocused();
 
   if (!videoUri) {
     return (
@@ -37,6 +45,8 @@ export default function EditorScreen() {
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <VideoEditor
         source={videoUri}
+        sourceType={sourceType ?? 'video'}
+        isActive={isFocused}
         onExportComplete={handleExportComplete}
         onExportProgress={(progress) => {
           console.log(`Export progress: ${Math.round(progress * 100)}%`);
@@ -44,19 +54,13 @@ export default function EditorScreen() {
         onCancel={handleCancel}
         config={{
           features: {
-            trim: true,
-            split: true,
-            speed: true,
-            volume: true,
-            crop: true,
-            rotate: true,
-            audio: true,
-            voiceover: true,
             text: true,
             filters: true,
-            effects: true,
             stickers: true,
+            music: true,
           },
+          // Set EXPO_PUBLIC_GIPHY_API_KEY in example/.env (see .env.example).
+          giphyApiKey: process.env.EXPO_PUBLIC_GIPHY_API_KEY,
           export: {
             quality: 'high',
             format: 'mp4',

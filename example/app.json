@@ -8,20 +8,23 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.example.videoeditor",
+      "bundleIdentifier": "com.faeizfurqan.videoeditor",
       "infoPlist": {
         "NSCameraUsageDescription": "This app needs camera access to record video",
         "NSMicrophoneUsageDescription": "This app needs microphone access to record audio",
         "NSPhotoLibraryUsageDescription": "This app needs photo library access to select videos"
-      }
+      },
+      "appleTeamId": "693F7ZVF34"
     },
     "android": {
-      "package": "com.example.videoeditor",
+      "package": "com.faeizfurqan.videoeditor",
       "permissions": [
-        "CAMERA",
-        "RECORD_AUDIO",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "plugins": [
@@ -29,7 +32,20 @@
       "expo-video",
       "expo-audio",
       "expo-image-picker",
-      ["./plugins/with-ffmpeg-kit", { "package": "full" }]
+      [
+        "./plugins/with-ffmpeg-kit",
+        {
+          "package": "full"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
     ]
   }
 }

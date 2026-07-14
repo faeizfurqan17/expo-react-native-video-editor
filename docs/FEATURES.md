@@ -19,21 +19,18 @@
   Note: atempo only supports 0.5-2.0, chain multiple for extreme speeds
 
 ### Volume Control
-- Adjust video's original audio volume: 0% (mute) to 200%
-- UI: Slider control
-- Preview: `expo-video` volume property
-- Export FFmpeg: `-filter:a "volume=LEVEL"`
+- Per-clip volume 0% (mute) to 200% — Edit tab → Volume opens `VolumeControl` for the selected clip (falls back to the clip under the playhead)
+- Global original-audio volume lives in the Audio tab
+- Export FFmpeg: `volume=LEVEL` in the segment's `-af` chain
 
 ### Crop
 - Crop video to specific aspect ratio or custom region
-- Presets: Original, 1:1, 4:5, 9:16, 16:9
-- UI: Draggable crop rectangle overlay
-- Preview: Crop state drives export; full live crop preview may be simplified in UI
-- Export FFmpeg: `crop=W:H:X:Y` in the segment `-vf` chain
+- Presets: Original, 1:1, 4:5, 9:16, 16:9 — plus a live draggable/resizable rectangle over the preview (`components/Preview/crop-overlay.tsx`); Apply commits the draft, Cancel discards
+- Export FFmpeg: `crop=W:H:X:Y` in the segment `-vf` chain, clamped to frame bounds with even dims
+- Known limit: the rectangle maps to the unrotated source frame (see ROADMAP Known Issues)
 
 ### Rotate
-- Rotate video 90°, 180°, 270°
-- UI: Rotate button (cycles through)
+- Rotates the **selected clip** (or the clip under the playhead) 90° per tap
 - Export FFmpeg: `transpose=1` (90° CW), `transpose=2` (90° CCW), `transpose=1,transpose=1` (180°)
 
 ### Delete Segment
@@ -44,8 +41,8 @@
 ## Audio Features
 
 ### Add Audio
-- Add background music track from device or bundled audio
-- UI: Audio browser/picker
+- Add background music track from device (expo-document-picker, `audio/*`); duration probed via FFmpeg; cancel/denial are safe no-ops
+- UI: "Add Music" in the Audio tab
 - Preview: Play audio alongside video
 - Export FFmpeg:
   ```
@@ -55,10 +52,9 @@
   ```
 
 ### Voiceover
-- Record voiceover using device microphone
-- UI: Record button with waveform visualization
-- Recording: `expo-audio` `useAudioRecorder` hook
-- Export: Same as Add Audio — mixed via FFmpeg amix
+- Record voiceover using device microphone (`expo-audio` `useAudioRecorder` in AudioTools)
+- Record/stop flow; the take anchors at the playhead time when recording started; mic-permission denial shows an inline error (waveform visualization still TODO)
+- Export: Same as Add Audio — mixed via FFmpeg amix (`-c:a aac` on the muxed output)
 
 ## Text Features
 
@@ -92,22 +88,18 @@
 
 ### Color-matrix filters
 - Built-in presets: Normal, Norway, Neon, Retro, Warm, Cool, B&W, Vintage, Sunset, Film, Fade (`packages/video-editor/src/filters/presets.ts`)
-- **Preview:** Skia **`useVideo`** + **`ImageShader`** + **`ColorMatrix`** using the same matrix as the preset, with **`applyIntensity()`** for the slider. With filters off, preview uses **`expo-video`** `VideoView` only (single decoder path).
-- **Export:** FFmpeg **`geq`** on RGB, generated from that matrix after `applyIntensity()` (`FFmpegCommandBuilder.colorMatrixToGeqFilter`). One mathematical pipeline for preview and encode.
-
-### Filter Intensity
-- Slider 0–1: `applyIntensity(filterMatrix, intensity)` blends each coefficient toward the identity matrix.
-- Same function is used for preview and for the matrix passed into export `geq` (no separate `mix` blend step).
+- **Preview:** Skia **`useVideo`** decodes the source directly, then **`Group`/`fitbox`** (re-rotates storage-orientation frames using the decoder-reported rotation) + **`Image`** + **`ColorMatrix`** applies the preset matrix at full strength. With filters off, preview uses **`expo-video`** `VideoView` only.
+- **Export:** the same matrix drives `FFmpegCommandBuilder.colorMatrixToFastFilter()` (`colorchannelmixer` + `lut`). One mathematical pipeline for preview and encode. Filters apply at full strength — there is no intensity control.
 
 ## Effect Features
 
 ### Zoom In
-- Gradual zoom into center
-- FFmpeg: `-vf "zoompan=z='min(zoom+0.0015,1.5)':d=DURATION*FPS:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"`
+- Gradual zoom into center over the effect window
+- FFmpeg: `zoompan=z='if(between(it,S,E),min(1+0.5*(it-S)/D,1.5),1)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=WxH` (S/E segment-local; size from real dims)
 
 ### Zoom Out
-- Start zoomed, pull back
-- FFmpeg: `-vf "zoompan=z='if(lte(zoom,1.0),1.5,max(1.001,zoom-0.0015))':d=DURATION*FPS"`
+- Start zoomed, pull back over the window
+- FFmpeg: `zoompan=z='if(between(it,S,E),max(1.5-0.5*(it-S)/D,1),1)':d=1:…:s=WxH`
 
 ### Glitch
 - Random RGB channel displacement
@@ -122,8 +114,8 @@
 - FFmpeg: `-vf "split[a][b];[b]fade=t=in:st=0:d=0.5,setpts=PTS+0.1/TB[b];[a][b]overlay=format=auto:alpha=premultiplied"`
 
 ### Shake
-- Camera shake simulation
-- FFmpeg: Random translate per frame via expression
+- Camera shake simulation with constant output dims (concat-safe)
+- FFmpeg: `crop=iw-20:ih-20:'10+if(between(t,S,E),-5+10*random(0),0)':'…',scale=iw+20:ih+20`
 
 ### Flash
 - Brightness pulse
@@ -132,8 +124,8 @@
 ## Sticker Features
 
 ### Add Sticker
-- Place image/GIF sticker on video at time range
-- UI: Sticker picker grid → tap to add → drag to position
+- Place image sticker on video at time range
+- UI: "Choose Sticker from Gallery" (expo-image-picker) → added at the playhead → drag to position; cancel is a safe no-op
 - Preview: Skia `<Image>` on canvas, draggable/resizable/rotatable via gesture-handler
 - Export FFmpeg:
   ```

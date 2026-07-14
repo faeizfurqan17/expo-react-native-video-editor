@@ -24,7 +24,7 @@
 - [x] EditTools (split, speed, volume, crop, rotate, delete)
 - [x] AudioTools (add audio, voiceover, mixer)
 - [x] TextTools (font, color, alignment, highlight)
-- [x] FilterTools (scrollable filter list + intensity slider)
+- [x] FilterTools (scrollable filter list, full-strength presets)
 - [x] EffectTools (effect grid + active list)
 - [x] StickerTools (sticker picker + active list)
 - [x] DraggableTextOverlay (drag on preview via gesture-handler)
@@ -34,12 +34,11 @@
 
 ## Phase 4: Filters & Effects ✅
 - [x] Skia color matrix definitions for 11 filter presets (`presets.ts`)
-- [x] Filter intensity via `applyIntensity()` (preview + export)
-- [x] Preview: Skia `useVideo` + `ImageShader` + `ColorMatrix` (single decoder when filtered)
-- [x] Export: FFmpeg `geq` from same matrix as preview (`ffmpeg-command-builder.ts`)
+- [x] Preview: Skia `useVideo` + `fitbox` (rotation) + `ColorMatrix` (single decoder when filtered)
+- [x] Export: `colorchannelmixer`/`lut` from same matrix as preview (`ffmpeg-command-builder.ts`)
 - [x] 7 effect types with FFmpeg filter chains
 - [ ] Optional: PNG / `.cube` LUTs for higher fidelity than matrix + geq
-- [ ] Implement effect preview animations (Skia + Reanimated)
+- [x] Effect preview approximations (`utils/effect-preview.ts` + preview transforms/washes; see FILTERS_AND_EFFECTS.md for fidelity notes)
 
 ## Phase 5: Example App ✅
 - [x] Home screen (pick video from gallery or record)
@@ -78,11 +77,26 @@
 - Timeline thumbnails use **FFmpeg** strips (`utils/thumbnails.ts`), not `expo-video` thumbnail APIs.
 - `expo-av` deprecated — use `expo-audio` for recording where applicable.
 - Requires Expo dev builds (not Expo Go) for native modules
+- Crop rectangle UI maps to the **unrotated** source frame; export clamps crop against post-rotation dims, but combining crop + 90°/270° rotation on the same clip may not match the preview exactly.
 
 ## Pending Features (TODO)
-- Audio picker integration (file picker for music tracks)
-- Voiceover recording with expo-audio
-- Sticker image picker integration
-- Volume slider panel for edit mode
-- Effect preview on Skia canvas during playback
+- [x] Audio picker integration (expo-document-picker, `handleAddAudio`)
+- [x] Voiceover recording with expo-audio (record/stop in AudioTools; waveform UI still TODO)
+- [x] Sticker image picker integration (expo-image-picker)
+- [x] Volume slider panel for edit mode (per-segment `VolumeControl`)
+- [x] Effect preview during playback (transform/wash approximations, not full Skia parity)
 - LUT-based filter preview (higher quality than color matrix)
+
+## Hardening Pass (Completed)
+- [x] Effects/stickers enable windows localized to segment time after `-ss` cuts (were absolute → never fired past the first split)
+- [x] Effects selected by overlap so they span split boundaries
+- [x] zoompan sized from real dims (was hardcoded `s=hd1080`); gated via `it` since zoompan has no timeline support
+- [x] shake keeps constant frame dims (concat `-c copy` safe)
+- [x] Rotate is per-segment (was rotating all clips in lockstep)
+- [x] `-c:a aac` explicit on audio mix output
+- [x] crop clamped to frame bounds, even dims
+- [x] drawtext escaping for `\` and `%`; path quoting for embedded quotes
+- [x] Trim clamped in store (no zero-length segments); export skips degenerate segments
+- [x] Live draggable crop rectangle with Apply/Cancel
+- [x] Init failure shows error + Retry (no more silent 30s/1080p fallback)
+- [x] Unit tests: command builder, store (split/delete/remap/undo), playback-sync, effect-preview (`yarn test`)
