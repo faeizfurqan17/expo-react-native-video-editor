@@ -1,6 +1,6 @@
 {
   "name": "@faeizfurqan/expo-story-video-and-image-editor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Open-source React Native video editor with trim, crop, filters, effects, text, stickers, and audio",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
