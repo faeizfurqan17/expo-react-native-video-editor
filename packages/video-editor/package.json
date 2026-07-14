@@ -20,11 +20,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/faeizfurqan/expo-react-native-video-editor.git"
+    "url": "git+https://github.com/faeizfurqan17/expo-react-native-video-editor.git"
   },
-  "homepage": "https://github.com/faeizfurqan/expo-react-native-video-editor#readme",
+  "homepage": "https://github.com/faeizfurqan17/expo-react-native-video-editor#readme",
   "bugs": {
-    "url": "https://github.com/faeizfurqan/expo-react-native-video-editor/issues"
+    "url": "https://github.com/faeizfurqan17/expo-react-native-video-editor/issues"
   },
   "author": "faeizfurqan",
   "keywords": [

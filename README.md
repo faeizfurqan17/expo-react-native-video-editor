@@ -1,6 +1,22 @@
-# Expo Story Video & Image Editor
+<p align="center">
+  <h1 align="center">Expo Story Video & Image Editor</h1>
+</p>
 
-An open-source, Instagram Stories–style video/image editor for Expo apps — fullscreen looping preview, swipeable color filters, draggable text and sticker overlays, background music mixing, and FFmpeg-based export.
+<p align="center">
+  An open-source, Instagram Stories–style video/image editor for Expo apps.<br/>
+  Fullscreen looping preview, swipeable color filters, draggable text and sticker overlays,<br/>
+  background music mixing, and FFmpeg-based export.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@faeizfurqan/expo-story-video-and-image-editor"><img src="https://img.shields.io/npm/v/@faeizfurqan/expo-story-video-and-image-editor.svg?style=flat-square" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/@faeizfurqan/expo-story-video-and-image-editor"><img src="https://img.shields.io/npm/dm/@faeizfurqan/expo-story-video-and-image-editor.svg?style=flat-square" alt="npm downloads" /></a>
+  <a href="https://github.com/faeizfurqan17/expo-react-native-video-editor"><img src="https://img.shields.io/github/stars/faeizfurqan17/expo-react-native-video-editor?style=flat-square" alt="GitHub stars" /></a>
+  <a href="https://github.com/faeizfurqan17/expo-react-native-video-editor/blob/main/packages/video-editor/LICENSE"><img src="https://img.shields.io/npm/l/@faeizfurqan/expo-story-video-and-image-editor.svg?style=flat-square" alt="license" /></a>
+  <img src="https://img.shields.io/badge/platforms-iOS%20%7C%20Android-brightgreen?style=flat-square" alt="platforms" />
+</p>
+
+---
 
 ![Demo](https://raw.githubusercontent.com/faeizfurqan17/expo-react-native-video-editor/main/packages/video-editor/assets/demo.gif)
 
