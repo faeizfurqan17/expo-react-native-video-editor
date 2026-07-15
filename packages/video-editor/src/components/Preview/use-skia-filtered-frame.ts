@@ -8,11 +8,31 @@ import {
   type SharedValue,
 } from 'react-native-reanimated';
 import { Skia, type SkImage } from '@shopify/react-native-skia';
-import {
-  __RNSkiaVideoPrivateAPI as RNSkiaVideoModule,
-  type VideoFrame,
-  type VideoPlayer,
+import type {
+  __RNSkiaVideoPrivateAPI as RNSkiaVideoModuleType,
+  VideoFrame,
+  VideoPlayer,
 } from '@azzapp/react-native-skia-video';
+
+// @azzapp/react-native-skia-video's top-level module code THROWS the instant
+// it's evaluated if no native module is linked (it does `if
+// (!ReactNativeSkiaVideoModule) throw ...` at module scope, not inside a
+// function) — so a plain top-level `require()` here is just as unsafe as a
+// static `import`: both evaluate the module immediately when this file is
+// loaded. This file is reachable from Expo Router's route graph traversal
+// (used to build getServerManifest.js for `expo export:embed`, which runs
+// even for a NATIVE platform export) — that traversal loads route
+// dependencies in a generic Node context with no real native modules linked,
+// which is exactly where this threw ("doesn't seem to be linked") despite
+// the app never actually running on web.
+//
+// The fix is deferring the require() into the ONE place it's actually used
+// (inside the effect below) rather than at module scope — a useEffect body
+// only ever runs when React genuinely mounts this component on a real
+// device/simulator runtime, never during static manifest generation.
+function getRNSkiaVideoModule(): typeof RNSkiaVideoModuleType {
+  return require('@azzapp/react-native-skia-video').__RNSkiaVideoPrivateAPI;
+}
 
 /**
  * Shared iOS + Android backend for the filtered preview decoder, built on
@@ -87,7 +107,7 @@ export function useSkiaFilteredFrame(source: string | null, options: Options): R
       setPlayer(null);
       return;
     }
-    const created = RNSkiaVideoModule.createVideoPlayer(source, resolutionRef.current ?? null);
+    const created = getRNSkiaVideoModule().createVideoPlayer(source, resolutionRef.current ?? null);
     setPlayer(created);
     created.on('error', (err) => console.warn('[skia-video] player error', err));
     return () => {
