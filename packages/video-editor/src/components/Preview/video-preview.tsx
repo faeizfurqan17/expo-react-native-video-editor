@@ -129,7 +129,7 @@ export function VideoPreview({
   // The Skia decoder is a SECOND full decode pipeline running alongside the
   // native expo-video player — its own AVPlayer on iOS (useVideo) or its own
   // native VideoPlayer/MediaCodec instance on Android (see
-  // use-skia-filtered-frame.android.ts) — with its own decode buffers and
+  // use-skia-filtered-frame.ts) — with its own decode buffers and
   // GPU textures. Creating it unconditionally the moment ANY video loads
   // means two concurrent full-res decoders at mount on both platforms,
   // which is a guaranteed large memory spike on big source files (e.g. a
@@ -288,7 +288,7 @@ export function VideoPreview({
   // Cap the Skia decoder's target resolution instead of decoding the
   // source's raw file resolution — a heavy source (e.g. 4K60/HDR) decoded at
   // full size lags and can eventually exhaust the decoder's recreate budget
-  // (see requestPlayerRecreate in use-skia-filtered-frame.shared.ts) after a
+  // (see requestPlayerRecreate in use-skia-filtered-frame.ts) after a
   // period of struggling to keep up, falling back to unfiltered native
   // preview. Export is unaffected — it always re-reads the original file at
   // full resolution via FFmpeg, never this capped preview decode.
