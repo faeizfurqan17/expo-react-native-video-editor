@@ -24,7 +24,7 @@ import type { FilterPreset, SourceType, StickerOverlay, TextOverlay } from '../.
 import { getFilterByPreset } from '../../filters/presets';
 import { fitRect, clamp01 } from '../../utils/layout';
 import { useSkiaFilteredFrame } from './use-skia-filtered-frame';
-import { NativeGradedVideoPlayer } from './graded-video-player';
+import { getNativeGradedVideoPlayer } from './graded-video-player';
 
 // iOS ships a standalone native module (GradedVideoPlayer, see
 // graded-video-player.ts) that applies color grading via
@@ -151,6 +151,10 @@ export function VideoPreview({
   // handles color grading natively — the Skia dual-decoder path is only
   // needed as a fallback if that native module isn't present (e.g. an app
   // that hasn't rebuilt after adding this library version yet).
+  // Resolved here (component body = real render only) rather than at module
+  // import time — see graded-video-player.ts for why an eager resolution
+  // crashes non-native bundling contexts like Expo Router's manifest build.
+  const NativeGradedVideoPlayer = useMemo(() => getNativeGradedVideoPlayer(), []);
   const nativeColorGradeAvailable = USE_NATIVE_COLOR_GRADE && NativeGradedVideoPlayer != null;
   const skiaVideoSource =
     !isVideo || nativeColorGradeAvailable || !SKIA_VIDEO_SUPPORTED || skiaBroken || !hasUsedFilter

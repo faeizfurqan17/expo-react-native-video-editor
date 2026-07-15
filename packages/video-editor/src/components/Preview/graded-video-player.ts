@@ -1,5 +1,5 @@
-import { requireNativeViewManager } from 'expo-modules-core';
 import type { ViewProps } from 'react-native';
+import type { ComponentType } from 'react';
 
 /**
  * Standalone AVPlayer-backed preview view (iOS only). Applies color grading
@@ -29,6 +29,30 @@ export interface GradedVideoPlayerNativeRef {
   seekTo(seconds: number): Promise<void>;
 }
 
-export const NativeGradedVideoPlayer = requireNativeViewManager<
+export type NativeGradedVideoPlayerComponent = ComponentType<
   GradedVideoPlayerProps & React.RefAttributes<GradedVideoPlayerNativeRef>
->('GradedVideoPlayer');
+>;
+
+// expo-modules-core's requireNativeViewManager throws IMMEDIATELY if called
+// where no native view manager can exist (confirmed: it crashed Expo
+// Router's getServerManifest.js build step, which loads route dependencies
+// in a generic Node context with no native modules linked — even for a
+// native Android/iOS export target, not just web). A module-scope call —
+// same as a static import evaluating it eagerly — has no way to defer past
+// that, so resolution is deferred to first actual call (from inside a React
+// component, on a real render) and memoized. A resolution failure collapses
+// to `null`, which every call site already null-checks (this view is
+// optional on Android/unsupported devices).
+let cached: NativeGradedVideoPlayerComponent | null | undefined;
+
+export function getNativeGradedVideoPlayer(): NativeGradedVideoPlayerComponent | null {
+  if (cached !== undefined) return cached;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { requireNativeViewManager } = require('expo-modules-core');
+    cached = requireNativeViewManager('GradedVideoPlayer') as NativeGradedVideoPlayerComponent;
+  } catch {
+    cached = null;
+  }
+  return cached;
+}
