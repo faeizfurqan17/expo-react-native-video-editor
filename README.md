@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  An open-source, Instagram Stories–style video/image editor for Expo apps.<br/>
-  Fullscreen looping preview, swipeable color filters, draggable text and sticker overlays,<br/>
-  background music mixing, and FFmpeg-based export.
+  <b>Instagram Stories, dropped into your own Expo app — one component.</b><br/>
+  Swipeable color filters, draggable text & sticker overlays, background music mixing,<br/>
+  and a single-pass FFmpeg export. Native color grading on iOS with zero extra GPU readback.
 </p>
 
 <p align="center">
@@ -14,11 +14,37 @@
   <a href="https://github.com/faeizfurqan17/expo-react-native-video-editor"><img src="https://img.shields.io/github/stars/faeizfurqan17/expo-react-native-video-editor?style=flat-square" alt="GitHub stars" /></a>
   <a href="https://github.com/faeizfurqan17/expo-react-native-video-editor/blob/main/packages/video-editor/LICENSE"><img src="https://img.shields.io/npm/l/@faeizfurqan/expo-story-video-and-image-editor.svg?style=flat-square" alt="license" /></a>
   <img src="https://img.shields.io/badge/platforms-iOS%20%7C%20Android-brightgreen?style=flat-square" alt="platforms" />
+  <img src="https://img.shields.io/badge/Expo-SDK%2050%2B-000020?style=flat-square&logo=expo&logoColor=white" alt="expo sdk" />
 </p>
 
 ---
 
 ![Demo](https://raw.githubusercontent.com/faeizfurqan17/expo-react-native-video-editor/main/packages/video-editor/assets/demo.gif)
+
+## Table of Contents
+
+- [Why this over rolling your own?](#why-this-over-rolling-your-own)
+- [Features](#features)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Lower-level access](#lower-level-access)
+- [Tech stack](#tech-stack)
+- [Project structure](#project-structure)
+- [Running the example app](#running-the-example-app)
+- [License](#license)
+
+## Why this over rolling your own?
+
+Building a Stories-style editor from scratch means fighting FFmpeg command strings, GPU-readback stalls on filtered preview, and platform-specific decoder quirks — for weeks. This package already fought those battles:
+
+| | This package | Banuba SDK | Rolling your own |
+|---|:---:|:---:|:---:|
+| Price | **Free, MIT** | $$$ license | Your time |
+| Native iOS color grading (no GPU readback) | **Yes** | Yes | Weeks of AVFoundation work |
+| Drag/pinch text + sticker overlays | **Yes** | Yes | Build it yourself |
+| FFmpeg export pipeline | **Yes, bundled** | Proprietary | Build it yourself |
+| Open source, auditable | **Yes** | No | — |
+| Vendor lock-in | **None** | SDK license required | — |
 
 ## Features
 
@@ -238,3 +264,9 @@ npx expo start --dev-client
 ## License
 
 MIT
+
+---
+
+<p align="center">
+  If this saved you a week of AVFoundation/FFmpeg pain, a ⭐ on <a href="https://github.com/faeizfurqan17/expo-react-native-video-editor">GitHub</a> helps other people find it too.
+</p>
